@@ -209,6 +209,40 @@ function createWindow() {
   mainWindow.loadFile(path.join(__dirname, 'index.html'));
 }
 
+// ---------------------------------------------------------------------------
+// Keyboard shortcuts
+// ---------------------------------------------------------------------------
+// A <webview> is a separate renderer process. Its key events never reach the
+// window listener in renderer.js, which is why shortcuts used to die the
+// moment you clicked into a page. `before-input-event` fires in the main
+// process for whichever webContents has focus, so it sees them all.
+//
+// Actions that need to type into our UI are listed in FOCUS_UI: for those the
+// main window has to be given focus first, or the keystroke lands in a page
+// that is no longer in front.
+
+const FOCUS_UI = new Set(['new-tab', 'focus-omnibox']);
+
+function matchShortcut(input) {
+  const ctrl = input.control || input.meta;
+  const key = (input.key || '').toLowerCase();
+
+  if (ctrl && !input.alt) {
+    if (key === 't') return { action: input.shift ? 'reopen-tab' : 'new-tab' };
+    if (key === 'w') return { action: 'close-tab' };
+    if (key === 'l') return { action: 'focus-omnibox' };
+    if (key === 'r') return { action: input.shift ? 'hard-reload' : 'reload' };
+    if (key === 'tab') return { action: 'cycle-tab', step: input.shift ? -1 : 1 };
+  }
+
+  if (input.alt && !ctrl) {
+    if (key === 'arrowleft') return { action: 'back' };
+    if (key === 'arrowright') return { action: 'forward' };
+  }
+
+  return null;
+}
+
 // When a page inside a <webview> tries to open a popup / target="_blank" link,
 // intercept it and hand the URL back to our UI so it opens as a new tab.
 app.on('web-contents-created', (_event, contents) => {
@@ -228,6 +262,22 @@ app.on('web-contents-created', (_event, contents) => {
       event.preventDefault();
       mainWindow.setFullScreen(!mainWindow.isFullScreen());
     }
+
+    // Only rescue shortcuts for pages. When our own UI has focus its window
+    // listener already handles them, and forwarding from both would run every
+    // shortcut twice — opening two tabs, closing two tabs.
+    if (contents.getType() !== 'webview') return;
+    if (!mainWindow || mainWindow.isDestroyed()) return;
+
+    const hit = matchShortcut(input);
+    if (!hit) return;
+
+    // Stop the page from also acting on it — otherwise Ctrl+R would reload
+    // the guest underneath us and Ctrl+W could be swallowed by a web app.
+    event.preventDefault();
+
+    if (FOCUS_UI.has(hit.action)) mainWindow.webContents.focus();
+    mainWindow.webContents.send('shortcut', hit);
   });
 
   if (contents.getType() !== 'webview') return;

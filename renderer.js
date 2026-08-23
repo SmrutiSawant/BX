@@ -128,6 +128,9 @@ let activeId = null;
 let nextId = 1;
 let urlEdited = false; // don't stomp on what the user is typing
 
+// URLs of recently closed tabs, most recent last. Ctrl+Shift+T pops one.
+const closedTabs = [];
+
 // ---------------------------------------------------------------------------
 // Tracking-parameter stripping
 // ---------------------------------------------------------------------------
@@ -369,6 +372,15 @@ function closeTab(id) {
   if (idx === -1) return;
 
   const [tab] = tabs.splice(idx, 1);
+
+  // Remember where it was so Ctrl+Shift+T can bring it back. An empty new tab
+  // page isn't worth restoring, and the list is capped so it can't grow
+  // without bound over a long session.
+  if (tab.url && !tab.url.startsWith(NEWTAB)) {
+    closedTabs.push(tab.url);
+    if (closedTabs.length > 10) closedTabs.shift();
+  }
+
   tab.el.remove();
   tab.wrap.remove();
 
@@ -450,23 +462,89 @@ urlInput.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') { urlEdited = false; syncToolbar(); urlInput.blur(); }
 });
 
-// Keyboard shortcuts. Note: these only fire while our UI has focus, not while
-// focus is inside a page — a known limitation of the <webview> approach.
-window.addEventListener('keydown', (e) => {
-  const ctrl = e.ctrlKey || e.metaKey;
+// ---------------------------------------------------------------------------
+// Keyboard shortcuts
+// ---------------------------------------------------------------------------
+// One table, two callers. The window listener below catches keys pressed while
+// our own UI has focus; main.js catches the ones pressed inside a page — a
+// <webview> is a separate process, so its key events never reach us — and
+// forwards the action here. Both end up in runAction, so the two paths can't
+// drift apart.
 
-  if (ctrl && e.key.toLowerCase() === 't') { e.preventDefault(); createTab(homeUrl()); urlInput.focus(); }
-  else if (ctrl && e.key.toLowerCase() === 'w') { e.preventDefault(); if (activeId !== null) closeTab(activeId); }
-  else if (ctrl && e.key.toLowerCase() === 'l') { e.preventDefault(); urlInput.focus(); }
-  else if (ctrl && e.key.toLowerCase() === 'r') { e.preventDefault(); try { activeTab().view.reload(); } catch {} }
-  else if (ctrl && e.key === 'Tab') {
-    e.preventDefault();
+const ACTIONS = {
+  'new-tab': () => { createTab(homeUrl()); urlInput.focus(); },
+
+  'close-tab': () => {
+    if (activeId === null) return;
+    closeTab(activeId);
+    focusActiveView();   // don't strand focus on the tab that just went away
+  },
+
+  'reopen-tab': () => {
+    const url = closedTabs.pop();
+    if (!url) return;
+    createTab(url);
+    focusActiveView();
+  },
+
+  'focus-omnibox': () => urlInput.focus(),
+
+  'reload': () => { try { activeTab().view.reload(); } catch {} },
+
+  // Ctrl+Shift+R — bypass the cache, the way every other browser does.
+  'hard-reload': () => { try { activeTab().view.reloadIgnoringCache(); } catch {} },
+
+  'back':   () => { try { activeTab().view.goBack(); } catch {} },
+  'forward':() => { try { activeTab().view.goForward(); } catch {} },
+
+  'cycle-tab': (payload) => {
+    if (tabs.length < 2) return;
     const i = tabs.findIndex((t) => t.id === activeId);
-    const step = e.shiftKey ? -1 : 1;
+    const step = (payload && payload.step) || 1;
     activateTab(tabs[(i + step + tabs.length) % tabs.length].id);
+    focusActiveView();   // follow the page you just switched to
+  },
+};
+
+// Moving to a different tab should put the caret in that page, so the next
+// shortcut arrives through the same route as the last one.
+function focusActiveView() {
+  const tab = activeTab();
+  if (!tab) return;
+  try { tab.view.focus(); } catch { /* guest not attached yet */ }
+}
+
+function runAction(name, payload) {
+  const fn = ACTIONS[name];
+  if (fn) fn(payload);
+}
+
+// Key combination -> action name, for the UI-has-focus case.
+function shortcutFor(e) {
+  const ctrl = e.ctrlKey || e.metaKey;
+  const key = e.key.toLowerCase();
+
+  if (ctrl && !e.altKey) {
+    if (key === 't') return [e.shiftKey ? 'reopen-tab' : 'new-tab'];
+    if (key === 'w') return ['close-tab'];
+    if (key === 'l') return ['focus-omnibox'];
+    if (key === 'r') return [e.shiftKey ? 'hard-reload' : 'reload'];
+    if (key === 'tab') return ['cycle-tab', { step: e.shiftKey ? -1 : 1 }];
   }
-  else if (e.altKey && e.key === 'ArrowLeft')  { e.preventDefault(); try { activeTab().view.goBack(); } catch {} }
-  else if (e.altKey && e.key === 'ArrowRight') { e.preventDefault(); try { activeTab().view.goForward(); } catch {} }
+
+  if (e.altKey && !ctrl) {
+    if (key === 'arrowleft') return ['back'];
+    if (key === 'arrowright') return ['forward'];
+  }
+
+  return null;
+}
+
+window.addEventListener('keydown', (e) => {
+  const hit = shortcutFor(e);
+  if (!hit) return;
+  e.preventDefault();
+  runAction(hit[0], hit[1]);
 });
 
 // ---------------------------------------------------------------------------
@@ -613,6 +691,11 @@ if (API.onFullScreen) {
 }
 if (API.onBlockCounts) {
   API.onBlockCounts((counts) => { blockCounts = counts; syncShield(); });
+}
+if (API.onShortcut) {
+  // Pressed while a page had focus. main.js already called preventDefault on
+  // the guest's behalf, so there's nothing left to suppress here.
+  API.onShortcut((hit) => runAction(hit.action, hit));
 }
 
 // canGoBack()/canGoForward() have no change event, so poll them. Cheap.

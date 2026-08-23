@@ -80,7 +80,11 @@ it inside WSL isn't enough.
 - Back / forward / reload / stop / home
 - Live page titles and favicons in the tab strip, loading spinner
 - `target="_blank"` links open in a new tab instead of a popup window
-- Shortcuts: `Ctrl+T` new tab, `Ctrl+W` close, `Ctrl+L` address bar, `Ctrl+R` reload, `Ctrl+Tab` next tab, `Alt+←/→` history
+- Shortcuts, working everywhere — including with focus inside a page:
+  `Ctrl+T` new tab, `Ctrl+Shift+T` reopen closed tab, `Ctrl+W` close,
+  `Ctrl+L` address bar, `Ctrl+R` reload, `Ctrl+Shift+R` hard reload,
+  `Ctrl+Tab` / `Ctrl+Shift+Tab` cycle tabs, `Alt+←/→` history,
+  `F11` fullscreen, `F12` devtools
 - `F12` opens devtools for whatever has focus — the browser UI or the page inside a tab
 - No OS title bar — window buttons sit in the tab strip, and the strip's empty space drags the window
 - Light monochrome UI, rounded pill tabs, and the page floating inside an 8px gutter
@@ -89,8 +93,8 @@ it inside WSL isn't enough.
 
 | File | Role |
 |---|---|
-| `main.js` | Electron main process. Owns the OS window; intercepts popups. |
-| `preload.js` | The one safe bridge from main → UI. Exposes a single function. |
+| `main.js` | Electron main process. Owns the OS window; blocks ads; intercepts popups; rescues keyboard shortcuts from pages. |
+| `preload.js` | The one safe bridge from main → UI. Nothing else crosses. |
 | `index.html` | The browser "chrome" — tab strip, toolbar, styling. |
 | `renderer.js` | Tab management, URL parsing, navigation, shortcuts. |
 | `newtab.html` | The new tab page. Self-contained; edit `LINKS` to change the tiles. |
@@ -110,8 +114,7 @@ Deliberately left out to keep this readable:
 - Find-in-page, zoom, devtools for the guest page
 - Tab drag-to-reorder
 - Incognito (give the `<webview>` a `partition="in-memory"` attribute)
-- Shortcuts while focus is inside a page — a known `<webview>` limitation.
-  Fixing it properly means registering accelerators via a `Menu` in `main.js`.
+- Find-in-page, zoom
 
 ## Two numbers that must stay in sync
 
@@ -163,6 +166,29 @@ One JSON file at `settings.json` in Electron's `userData` directory, read at
 startup and written on change. No dependency: `electron-store` is ESM-only from
 v11 and this project is CommonJS. Only keys present in `DEFAULT_SETTINGS` in
 `main.js` are accepted, so a hand-edited file can't inject arbitrary state.
+
+## Shortcuts live in two places on purpose
+
+A `<webview>` is a separate renderer process, so keys pressed inside a page
+never reach the `window` listener in `renderer.js`. That's why shortcuts used
+to stop working the moment you clicked into a page.
+
+`before-input-event` in `main.js` fires for whichever webContents has focus, so
+it catches them all. It forwards the *intent* — `{ action: 'new-tab' }` — over
+IPC, and `runAction` in `renderer.js` executes it. Both the window listener and
+the IPC path go through that one table, so they can't drift apart.
+
+Two things to keep right if you add a shortcut:
+
+- **Add it to both `matchShortcut` in `main.js` and `shortcutFor` in
+  `renderer.js`.** They must agree, or a shortcut works in one focus context
+  and not the other.
+- **Main only forwards for `contents.getType() === 'webview'`.** When our own
+  UI has focus, the window listener already handles it; forwarding from both
+  would run every shortcut twice — two tabs opened, two closed.
+
+If an action needs to type into our UI, add it to `FOCUS_UI` in `main.js` so
+the window is focused before the message is sent.
 
 ## Only one webRequest listener per session
 

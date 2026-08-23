@@ -121,15 +121,16 @@ years of work. Don't half-do it.
 
 ## Axis 2 — Features Chrome lacks
 
-### 2.1 Fix keyboard shortcuts first — *2 hours, unblocks everything*
+### 2.1 Fix keyboard shortcuts first — ✅ *done*
 
-Your README lists this as a known limitation: shortcuts don't fire while focus is
-inside a page. But you've **already solved it** for F12 and F11 — in `main.js`,
-`contents.on('before-input-event', ...)` catches keys regardless of focus. Route
-`Ctrl+T/W/L/R/Tab` through the same handler and forward them over IPC to the
-renderer.
+`before-input-event` in `main.js` now catches every shortcut regardless of
+focus and forwards the action over IPC; `runAction` in `renderer.js` is the
+single table both the window listener and the IPC path go through. Picked up
+`Ctrl+Shift+T` (reopen closed tab) and `Ctrl+Shift+R` (hard reload) on the way.
 
-Do this before any feature below that needs a shortcut.
+This was the blocker for the command palette (2.4) and anything else needing a
+key that works inside a page. See the README for the two rules to follow when
+adding a shortcut.
 
 ### 2.2 Split view — *half a day*
 

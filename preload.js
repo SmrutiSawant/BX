@@ -26,6 +26,11 @@ contextBridge.exposeInMainWorld('browserAPI', {
   // Called when a tab navigates, so its counter starts fresh on the new page.
   resetBlockCount: (tabId) => ipcRenderer.send('reset-block-count', tabId),
 
+  // Shortcuts pressed while a page had focus, rescued by the main process.
+  onShortcut: (callback) => {
+    ipcRenderer.on('shortcut', (_event, payload) => callback(payload));
+  },
+
   // Settings, persisted to a JSON file in userData by the main process.
   getSettings: () => ipcRenderer.invoke('get-settings'),
   setSetting: (key, value) => ipcRenderer.send('set-setting', key, value),
