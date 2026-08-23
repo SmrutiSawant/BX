@@ -44,7 +44,8 @@
     user-select: none;
   }
 
-  #app { display: flex; flex-direction: column; height: 100%; }
+  /* position: relative so the engine menu can anchor to the window. */
+  #app { display: flex; flex-direction: column; height: 100%; position: relative; }
 
   /* ---------- Tab strip ---------- */
   /* With the OS title bar gone, this strip is the window's drag handle.
@@ -222,6 +223,106 @@
   }
   #url::placeholder { color: var(--text-dim); }
 
+  /* ---------- Search engine picker ---------- */
+  #engine {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    height: 24px;
+    padding: 0 9px;
+    margin-right: 2px;
+    border: 0;
+    border-radius: 12px;
+    background: rgba(0,0,0,.06);
+    color: var(--text);
+    font: inherit;
+    font-size: 11px;
+    white-space: nowrap;
+    cursor: default;
+  }
+  #engine:hover { background: rgba(0,0,0,.11); }
+  #engine svg { width: 12px; height: 12px; fill: currentColor; flex: 0 0 12px; }
+
+  /* Anchored under the toolbar: 40px tab strip + 44px toolbar. */
+  #enginemenu {
+    position: absolute;
+    top: 84px;
+    right: 8px;
+    z-index: 10;
+    min-width: 232px;
+    padding: 5px;
+    border-radius: 10px;
+    background: var(--tab-active);
+    box-shadow: 0 0 0 1px var(--border), 0 10px 28px rgba(0,0,0,.16);
+    display: none;
+  }
+  #enginemenu.open { display: block; }
+
+  .engine-opt {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    width: 100%;
+    padding: 7px 9px;
+    border: 0;
+    border-radius: 7px;
+    background: transparent;
+    color: var(--text);
+    font: inherit;
+    text-align: left;
+    cursor: default;
+  }
+  .engine-opt:hover { background: var(--tab-hover); }
+  .engine-opt .tick {
+    flex: 0 0 13px;
+    width: 13px; height: 13px;
+    fill: var(--text);
+    visibility: hidden;
+  }
+  .engine-opt.active .tick { visibility: visible; }
+  .engine-opt .label { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+  .engine-opt .label b { font-weight: 600; font-size: 12px; }
+  .engine-opt .label small { color: var(--text-dim); font-size: 10.5px; }
+
+  /* SearXNG instance editor, shown under that row when it's the live engine.
+     Public instances die; this makes swapping one a five-second job instead
+     of a source edit. */
+  .instance {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    margin: 2px 5px 6px 31px;   /* 31px lines up with the option label */
+  }
+  .instance input {
+    width: 100%;
+    height: 26px;
+    padding: 0 8px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--toolbar-bg);
+    color: var(--text);
+    font: inherit;
+    font-size: 11px;
+    outline: 0;
+    user-select: text;
+  }
+  .instance input:focus { border-color: var(--text); }
+  .instance small { color: var(--text-dim); font-size: 10px; line-height: 1.35; }
+
+  .chips { display: flex; flex-wrap: wrap; gap: 4px; }
+  .chip {
+    padding: 2px 7px;
+    border: 0;
+    border-radius: 9px;
+    background: rgba(0,0,0,.06);
+    color: var(--text-dim);
+    font: inherit;
+    font-size: 10px;
+    cursor: default;
+  }
+  .chip:hover { background: rgba(0,0,0,.12); color: var(--text); }
+  .chip.active { background: var(--text); color: var(--tab-active); }
+
   /* Blocked-request counter. Hidden until something is actually blocked, so
      it reads as a result rather than as chrome. */
   #shield {
@@ -301,14 +402,22 @@
           <path class="warn" d="M1 21h22L12 2 1 21zm12-3h-2v-2h2v2zm0-4h-2v-4h2v4z"/>
         </svg>
         <input id="url" type="text" spellcheck="false" autocomplete="off"
-               placeholder="Search DuckDuckGo or type a URL" />
+               placeholder="Search or type a URL" />
       </div>
+
+      <button id="engine" title="Change search engine">
+        <svg viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27A6.47 6.47 0 0 0 16 9.5 6.5 6.5 0 1 0 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"/></svg>
+        <span id="enginename">—</span>
+      </button>
 
       <div id="shield" title="Ads and trackers blocked on this page">
         <svg viewBox="0 0 24 24"><path d="M12 1 3 5v6c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V5l-9-4z"/></svg>
         <span id="blockcount">0</span>
       </div>
     </div>
+
+    <!-- Populated by renderer.js from SEARCH_ENGINES. -->
+    <div id="enginemenu"></div>
 
     <div id="views"></div>
   </div>

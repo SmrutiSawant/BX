@@ -151,12 +151,13 @@
     <div id="greeting"></div>
   </div>
 
-  <!-- Submits straight to DuckDuckGo. No IPC needed: the form navigates this
-       webview, and the browser's address bar follows along automatically.
-       Keep this in sync with SEARCH in renderer.js. -->
-  <form action="https://duckduckgo.com/" method="get" autocomplete="off">
+  <!-- Submits straight to the chosen engine. No IPC needed: the form navigates
+       this webview, and the browser's address bar follows along automatically.
+       The action and field name below are rewritten by the script at the
+       bottom; these values are the SearXNG defaults, used if that never runs. -->
+  <form action="https://searx.be/search" method="get" autocomplete="off">
     <svg viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27A6.47 6.47 0 0 0 16 9.5 6.5 6.5 0 1 0 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"/></svg>
-    <input name="q" type="text" placeholder="Search DuckDuckGo" autofocus spellcheck="false" />
+    <input name="q" type="text" placeholder="Search" autofocus spellcheck="false" />
   </form>
 
   <div id="links"></div>
@@ -164,6 +165,32 @@
   <footer><kbd>Ctrl</kbd> + <kbd>L</kbd> to jump to the address bar</footer>
 
 <script>
+  // ---- search engine ----
+  // This page has no preload bridge, so renderer.js passes the chosen engine
+  // in the query string (`newtab.html?engine=…`). Engines disagree on the
+  // field name — Marginalia wants `query`, the others want `q` — so the form
+  // has to be rewritten, not just re-pointed.
+  // Keep this table in sync with SEARCH_ENGINES in renderer.js.
+  const params = new URLSearchParams(location.search);
+
+  // SearXNG has no fixed home — the instance is chosen in the toolbar and
+  // arrives here as a parameter.
+  const instance = params.get('instance') || 'https://searx.be';
+
+  const ENGINES = {
+    searxng:    { name: 'SearXNG',    action: instance + '/search',                   param: 'q' },
+    marginalia: { name: 'Marginalia', action: 'https://marginalia-search.com/search', param: 'query' },
+    duckduckgo: { name: 'DuckDuckGo', action: 'https://duckduckgo.com/',              param: 'q' },
+  };
+
+  const engine = ENGINES[params.get('engine')] || ENGINES.searxng;
+  const form = document.querySelector('form');
+  const searchInput = form.querySelector('input');
+
+  form.action = engine.action;
+  searchInput.name = engine.param;
+  searchInput.placeholder = 'Search ' + engine.name;
+
   // ---- clock + greeting ----
   function tick() {
     const now = new Date();

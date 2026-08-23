@@ -32,18 +32,26 @@ advertising, so Chrome **cannot** ship default tracker blocking without cannibal
 its parent. You have no such constraint. This axis is cheap to build and impossible
 for Chrome to copy.
 
-### 1.1 Change the default search engine — *5 minutes*
+### 1.1 Change the default search engine — ✅ *done*
 
-`renderer.js` line 12:
+Google is gone. `SEARCH_ENGINES` in `renderer.js` holds three options — SearXNG
+(default), Marginalia, DuckDuckGo — with a picker in the toolbar and the choice
+persisted to `settings.json`. Both open-source engines can be self-hosted.
 
-```js
-const SEARCH = (q) => 'https://www.google.com/search?q=' + encodeURIComponent(q);
-```
+Worth knowing: engines disagree on the query parameter (`q` vs Marginalia's
+`query`), and public SearXNG instances routinely go dead — not offline, but
+returning zero results because their upstreams have blocked them. The instance
+is therefore editable from the toolbar and saved to `settings.json`. See the
+README for why this happens.
 
-Swap for DuckDuckGo (`https://duckduckgo.com/?q=`), Brave Search
-(`https://search.brave.com/search?q=`), or Startpage. Lowest-effort, highest-symbolism
-change in the whole document. Consider a small settings object so it's switchable
-rather than hardcoded.
+**Next step here — self-host SearXNG (*1 hour*).** It's the only way to make
+metasearch reliable: your own IP, your own upstream quota, nobody else's bot
+traffic burning it. `docker run -d -p 8888:8080 searxng/searxng`, then point the
+instance field at `http://localhost:8888`. Worth doing before building anything
+else on this list if search is your daily friction.
+
+Also still open: per-site search shortcuts (`w foo` → Wikipedia, `gh foo` →
+GitHub), which is cheap now that the engine table exists.
 
 ### 1.2 Built-in ad and tracker blocking — *half a day, highest impact*
 
@@ -146,10 +154,14 @@ Fuzzy-search across open tabs, history, bookmarks, and actions in one overlay. A
 best idea. Genuinely faster than Chrome's omnibox because it searches *open tabs*,
 which Chrome buries. Needs 2.1 and 2.5.
 
-### 2.5 Persistence: history, bookmarks, sessions — *1 day, foundational*
+### 2.5 Persistence: history, bookmarks, sessions — *1 day, foundational* — 🟡 *started*
 
-Your README flags this as not implemented. `electron-store` is the easy path; SQLite
-via `better-sqlite3` if history grows large.
+A minimal settings store already exists: `settings.json` in `userData`, read at
+startup and written on change, wired through `main.js` and `preload.js`. It
+holds one key today. History and bookmarks need real storage on top.
+
+`electron-store` is the easy path; SQLite via `better-sqlite3` if history grows
+large.
 
 **Gotcha:** current `electron-store` (v11) is ESM-only — no CommonJS build at all.
 This project is CommonJS (`require` throughout `main.js`, no `"type": "module"` in

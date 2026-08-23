@@ -58,7 +58,16 @@ it inside WSL isn't enough.
 - **Ad and tracker blocking, on by default.** Real EasyList + EasyPrivacy rules
   via `@ghostery/adblocker-electron` — the same lists uBlock Origin uses. The
   toolbar shows a live count of what was blocked on the current page.
-- **DuckDuckGo, not Google**, in both the address bar and the new tab page.
+- **Open source search by default.** The picker beside the address bar switches
+  between three engines, and the choice persists:
+
+  | Engine | Licence | Good for |
+  |---|---|---|
+  | **SearXNG** (default) | AGPL | General search. A metasearch engine — it fans your query out to ~270 upstreams and merges the results, so no single one builds a profile of you. |
+  | **Marginalia** | AGPL | Finding actual writing. Its own crawler and index, tuned for text-heavy non-commercial pages. Superb for essays and old web; useless for weather or opening hours. |
+  | **DuckDuckGo** | Proprietary | The reliable fallback. Doesn't profile you, but you can't read its source. |
+
+  Both open-source options can be self-hosted. Google isn't in the list.
 - **Tracking parameters stripped** from URLs you navigate to — `utm_*`,
   `fbclid`, `gclid`, `msclkid`, `igshid`, `mc_eid` and ~25 more. They tell the
   sender who clicked and change nothing about the page you get.
@@ -118,6 +127,42 @@ match the frame — set it to `'system'` if you'd rather follow the OS.
 
 The strip's `padding-right: 148px` reserves space for those buttons. Shrink it
 and your tabs slide underneath them.
+
+## Why SearXNG sometimes returns nothing
+
+SearXNG has no index of its own. It relays your query to Google, Bing and
+others and merges what comes back — which is exactly what makes it private, and
+also its weak point. Those upstreams block datacenter IPs hard. A popular public
+instance gets scraped by bots until every upstream has blocked it, and from then
+on it answers every query with **"No results were found."** The instance is up.
+It simply has nothing left to relay.
+
+This is a property of public instances, not a bug here, and it is why the
+instance is editable from the toolbar: open the engine picker, and under SearXNG
+there's a field and a row of quick picks. The choice is saved.
+
+Counter-intuitively, **an instance that makes you pass a browser check is
+usually the better bet.** That check is what protects its upstream quota, and a
+real browser clears it in a second or two. An instance that lets anything
+straight through is often one whose upstreams have already given up on it.
+
+The real fix is self-hosting — your own IP, your own quota, no one else's bot
+traffic. `docker run -d -p 8888:8080 searxng/searxng`, then paste
+`http://localhost:8888` into the instance field. That address is explicitly
+allowed; the field accepts `localhost` and bare IPs as well as public hostnames.
+
+More instances at <https://searx.space>.
+
+Marginalia is unaffected by all of this — it runs its own crawler and index.
+Note that it takes its query in `query=`, not `q=`, which is why the new tab
+page rewrites the form's field name and not just its action.
+
+## Settings
+
+One JSON file at `settings.json` in Electron's `userData` directory, read at
+startup and written on change. No dependency: `electron-store` is ESM-only from
+v11 and this project is CommonJS. Only keys present in `DEFAULT_SETTINGS` in
+`main.js` are accepted, so a hand-edited file can't inject arbitrary state.
 
 ## Only one webRequest listener per session
 

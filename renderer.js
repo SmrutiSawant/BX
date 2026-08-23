@@ -8,14 +8,102 @@
 // The new tab page ships with the app. Resolved relative to index.html so it
 // works no matter where the folder lives on disk.
 const NEWTAB = new URL('newtab.html', location.href).href;
-const HOME = NEWTAB;
-
-// Not Google. DuckDuckGo doesn't log searches or build a profile from them,
-// which is the whole reason this browser exists.
-const SEARCH = (q) => 'https://duckduckgo.com/?q=' + encodeURIComponent(q);
 
 // The preload bridge. Guarded so the UI still runs if it's ever missing.
 const API = window.browserAPI || {};
+
+// ---------------------------------------------------------------------------
+// Search engines
+// ---------------------------------------------------------------------------
+// Two of the three are open source, which is a stronger guarantee than a
+// privacy policy: you can read what the thing does, and run it yourself.
+//
+// SearXNG is a metasearch engine (AGPL) — it forwards your query to other
+// engines and merges the results, so no single upstream sees a profile of you.
+//
+// The catch is instances. SearXNG has no index of its own; it scrapes Google,
+// Bing and friends, who aggressively block datacenter IPs. A popular public
+// instance gets hammered by bots until every upstream blocks it, and then it
+// answers every query with "No results were found" — the instance is up, it
+// just has nothing to relay. That is a property of public instances, not a bug
+// here, and it is why this is editable from the toolbar rather than hardcoded.
+//
+// Counter-intuitively, an instance that makes you pass a browser check is
+// usually the better bet: the check is what keeps its upstream quota alive,
+// and a real browser clears it in a second or two. An instance that lets
+// anything straight through is often one whose upstreams have already given up
+// on it.
+//
+// The real fix is self-hosting — your own IP, your own quota. See ROADMAP.md.
+const SEARXNG_INSTANCES = [
+  'https://searx.be',            // longest-running; browser check
+  'https://baresearch.org',      // browser check (Anubis)
+  'https://priv.au',
+  'https://opnxng.com',
+  'https://search.inetol.net',
+];
+
+let searxngInstance = SEARXNG_INSTANCES[0];
+
+const SEARCH_ENGINES = [
+  {
+    id: 'searxng',
+    name: 'SearXNG',
+    note: 'Open source · merges ~270 engines',
+    search: (q) => searxngInstance + '/search?q=' + encodeURIComponent(q),
+  },
+  {
+    id: 'marginalia',
+    name: 'Marginalia',
+    // Its own crawler and index — not a front end for anyone else's. Tuned
+    // for text-heavy non-commercial pages, so it's superb for finding real
+    // writing and useless for weather or opening hours. URL format is from
+    // its OpenSearch descriptor; note the param is `query`, not `q`.
+    note: 'Open source · indie, text-heavy web',
+    search: (q) => 'https://marginalia-search.com/search?query=' + encodeURIComponent(q),
+  },
+  {
+    id: 'duckduckgo',
+    name: 'DuckDuckGo',
+    // Not open source, but reliable and doesn't profile you — the fallback
+    // when an instance is having a bad day.
+    note: 'Proprietary · general purpose',
+    search: (q) => 'https://duckduckgo.com/?q=' + encodeURIComponent(q),
+  },
+];
+
+let engineId = SEARCH_ENGINES[0].id;
+
+const engineOf = (id) => SEARCH_ENGINES.find((e) => e.id === id) || SEARCH_ENGINES[0];
+const SEARCH = (q) => engineOf(engineId).search(q);
+
+// The new tab page is a separate document with no preload of its own, so the
+// chosen engine — and the instance, which it can't otherwise know — ride along
+// in the query string. Keep the table in newtab.html in sync with
+// SEARCH_ENGINES above.
+const homeUrl = () =>
+  NEWTAB + '?engine=' + encodeURIComponent(engineId)
+         + '&instance=' + encodeURIComponent(searxngInstance);
+
+// Accepts what someone would actually paste: "searx.be", "https://searx.be/",
+// "https://searx.be/search", or "http://localhost:8888" for a self-hosted one
+// — that last case is the whole point, so it must not be rejected.
+// Returns null if it can't be made into an origin.
+function normalizeInstance(raw) {
+  const s = String(raw || '').trim();
+  if (!s) return null;
+  try {
+    const u = new URL(/^https?:\/\//i.test(s) ? s : 'https://' + s);
+    if (u.protocol !== 'https:' && u.protocol !== 'http:') return null;
+
+    // A hostname with no dot is only meaningful on the local machine.
+    if (!u.hostname.includes('.') && u.hostname !== 'localhost') return null;
+
+    return u.origin;   // drops any path, query and trailing slash
+  } catch {
+    return null;
+  }
+}
 
 const tabsEl   = document.getElementById('tabs');
 const viewsEl  = document.getElementById('views');
@@ -23,6 +111,10 @@ const urlInput = document.getElementById('url');
 const lockIcon = document.getElementById('lock');
 const shieldEl = document.getElementById('shield');
 const blockEl  = document.getElementById('blockcount');
+
+const engineBtn  = document.getElementById('engine');
+const engineName = document.getElementById('enginename');
+const engineMenu = document.getElementById('enginemenu');
 
 const backBtn    = document.getElementById('back');
 const forwardBtn = document.getElementById('forward');
@@ -154,7 +246,7 @@ function activeTab() {
   return getTab(activeId);
 }
 
-function createTab(url = HOME, { activate = true } = {}) {
+function createTab(url = homeUrl(), { activate = true } = {}) {
   const id = nextId++;
   url = stripTracking(url);
 
@@ -281,7 +373,7 @@ function closeTab(id) {
   tab.wrap.remove();
 
   if (tabs.length === 0) {
-    createTab(HOME);            // never leave the window empty
+    createTab(homeUrl());            // never leave the window empty
     return;
   }
   if (activeId === id) {
@@ -342,8 +434,8 @@ function navigate(input) {
 
 backBtn.addEventListener('click', () => { try { activeTab().view.goBack(); } catch {} });
 forwardBtn.addEventListener('click', () => { try { activeTab().view.goForward(); } catch {} });
-homeBtn.addEventListener('click', () => navigate(HOME));
-newTabBtn.addEventListener('click', () => { createTab(HOME); urlInput.focus(); });
+homeBtn.addEventListener('click', () => navigate(homeUrl()));
+newTabBtn.addEventListener('click', () => { createTab(homeUrl()); urlInput.focus(); });
 
 reloadBtn.addEventListener('click', () => {
   const view = activeTab().view;
@@ -363,7 +455,7 @@ urlInput.addEventListener('keydown', (e) => {
 window.addEventListener('keydown', (e) => {
   const ctrl = e.ctrlKey || e.metaKey;
 
-  if (ctrl && e.key.toLowerCase() === 't') { e.preventDefault(); createTab(HOME); urlInput.focus(); }
+  if (ctrl && e.key.toLowerCase() === 't') { e.preventDefault(); createTab(homeUrl()); urlInput.focus(); }
   else if (ctrl && e.key.toLowerCase() === 'w') { e.preventDefault(); if (activeId !== null) closeTab(activeId); }
   else if (ctrl && e.key.toLowerCase() === 'l') { e.preventDefault(); urlInput.focus(); }
   else if (ctrl && e.key.toLowerCase() === 'r') { e.preventDefault(); try { activeTab().view.reload(); } catch {} }
@@ -376,6 +468,137 @@ window.addEventListener('keydown', (e) => {
   else if (e.altKey && e.key === 'ArrowLeft')  { e.preventDefault(); try { activeTab().view.goBack(); } catch {} }
   else if (e.altKey && e.key === 'ArrowRight') { e.preventDefault(); try { activeTab().view.goForward(); } catch {} }
 });
+
+// ---------------------------------------------------------------------------
+// Search engine picker
+// ---------------------------------------------------------------------------
+
+function renderEngineMenu() {
+  engineMenu.textContent = '';
+
+  for (const e of SEARCH_ENGINES) {
+    const opt = document.createElement('button');
+    opt.className = 'engine-opt' + (e.id === engineId ? ' active' : '');
+
+    // SVG elements need createElementNS and setAttribute — their className is
+    // an SVGAnimatedString, not a plain string.
+    const tick = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    tick.setAttribute('viewBox', '0 0 24 24');
+    tick.setAttribute('class', 'tick');
+    const tickPath = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+    tickPath.setAttribute('d', 'M9 16.2 4.8 12l-1.4 1.4L9 19 21 7l-1.4-1.4z');
+    tick.appendChild(tickPath);
+
+    const label = document.createElement('span');
+    label.className = 'label';
+    const name = document.createElement('b');
+    name.textContent = e.name;
+    const note = document.createElement('small');
+    note.textContent = e.note;
+    label.append(name, note);
+
+    opt.append(tick, label);
+    opt.addEventListener('click', () => { setEngine(e.id); closeEngineMenu(); });
+    engineMenu.appendChild(opt);
+
+    // The instance editor belongs to SearXNG and only makes sense when it's
+    // the engine in use, so it hangs off that row rather than sitting in a
+    // separate settings screen.
+    if (e.id === 'searxng' && engineId === 'searxng') {
+      engineMenu.appendChild(buildInstanceEditor());
+    }
+  }
+}
+
+function buildInstanceEditor() {
+  const box = document.createElement('div');
+  box.className = 'instance';
+
+  const field = document.createElement('input');
+  field.type = 'text';
+  field.spellcheck = false;
+  field.value = searxngInstance;
+  field.setAttribute('aria-label', 'SearXNG instance');
+
+  const commit = () => {
+    if (setInstance(field.value)) field.value = searxngInstance;
+    else field.value = searxngInstance;   // rejected — show what's still in use
+  };
+  field.addEventListener('keydown', (ev) => {
+    if (ev.key === 'Enter') { ev.preventDefault(); commit(); field.blur(); }
+    if (ev.key === 'Escape') { field.value = searxngInstance; field.blur(); }
+  });
+  field.addEventListener('blur', commit);
+
+  const chips = document.createElement('div');
+  chips.className = 'chips';
+  for (const url of SEARXNG_INSTANCES) {
+    const chip = document.createElement('button');
+    chip.className = 'chip' + (url === searxngInstance ? ' active' : '');
+    chip.textContent = url.replace(/^https?:\/\//, '');
+    chip.addEventListener('click', () => {
+      setInstance(url);
+      renderEngineMenu();
+    });
+    chips.appendChild(chip);
+  }
+
+  const hint = document.createElement('small');
+  hint.textContent = 'No results on every query? The instance is up but its '
+    + 'upstreams have blocked it. Try another.';
+
+  box.append(field, chips, hint);
+  return box;
+}
+
+// Re-point any open new tab page, whose search form was built from the old
+// engine or instance and is now stale.
+function refreshNewTabPages() {
+  const url = homeUrl();
+  for (const t of tabs) {
+    if (!t.url.startsWith(NEWTAB)) continue;
+    t.url = url;
+    try { t.view.loadURL(url); } catch { /* guest not ready; it'll be right next time */ }
+  }
+}
+
+function setEngine(id) {
+  engineId = engineOf(id).id;
+  const engine = engineOf(engineId);
+
+  engineName.textContent = engine.name;
+  urlInput.placeholder = 'Search ' + engine.name + ' or type a URL';
+  if (API.setSetting) API.setSetting('searchEngine', engineId);
+
+  renderEngineMenu();
+  refreshNewTabPages();
+}
+
+function setInstance(raw) {
+  const origin = normalizeInstance(raw);
+  if (!origin || origin === searxngInstance) return Boolean(origin);
+
+  searxngInstance = origin;
+  if (API.setSetting) API.setSetting('searxngInstance', origin);
+  refreshNewTabPages();
+  return true;
+}
+
+function closeEngineMenu() { engineMenu.classList.remove('open'); }
+
+engineBtn.addEventListener('click', (e) => {
+  e.stopPropagation();          // don't let the window handler close it again
+  engineMenu.classList.toggle('open');
+});
+
+// Clicks inside the menu keep it open — otherwise typing in the instance field
+// would dismiss it on the first keystroke. Choosing an engine closes it
+// explicitly, in that option's own handler.
+engineMenu.addEventListener('click', (e) => e.stopPropagation());
+
+// Any click elsewhere, or Escape, dismisses it.
+window.addEventListener('click', closeEngineMenu);
+window.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeEngineMenu(); });
 
 // --- Bridges from the main process ---
 if (API.hasTitleBarOverlay) {
@@ -395,5 +618,20 @@ if (API.onBlockCounts) {
 // canGoBack()/canGoForward() have no change event, so poll them. Cheap.
 setInterval(syncToolbar, 400);
 
-createTab(HOME);
-urlInput.focus();
+// Settings arrive over IPC, so the first tab waits for them. Opening it
+// earlier would bake the default engine into its URL, and the new tab page
+// would then disagree with the picker.
+(async function init() {
+  if (API.getSettings) {
+    try {
+      const saved = await API.getSettings();
+      if (saved && saved.searchEngine) engineId = engineOf(saved.searchEngine).id;
+      if (saved && saved.searxngInstance) {
+        searxngInstance = normalizeInstance(saved.searxngInstance) || searxngInstance;
+      }
+    } catch { /* fall back to the defaults */ }
+  }
+  setEngine(engineId);
+  createTab(homeUrl());
+  urlInput.focus();
+})();

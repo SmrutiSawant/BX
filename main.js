@@ -91,6 +91,48 @@ ipcMain.on('reset-block-count', (_event, tabId) => {
   blockCounts.delete(tabId);
 });
 
+// ---------------------------------------------------------------------------
+// Settings
+// ---------------------------------------------------------------------------
+// A single JSON file in userData. Deliberately dependency-free: the settings
+// surface is one key today, and `electron-store` — the obvious library — is
+// ESM-only from v11, which this CommonJS project can't require. When settings
+// grow past a handful of keys, see ROADMAP.md 2.5.
+
+const DEFAULT_SETTINGS = {
+  searchEngine: 'searxng',
+  searxngInstance: 'https://searx.be',
+};
+let settings = { ...DEFAULT_SETTINGS };
+
+function settingsPath() {
+  return path.join(app.getPath('userData'), 'settings.json');
+}
+
+function loadSettings() {
+  try {
+    const raw = require('fs').readFileSync(settingsPath(), 'utf8');
+    settings = { ...DEFAULT_SETTINGS, ...JSON.parse(raw) };
+  } catch {
+    // No file yet, or it's corrupt. Defaults are already in place.
+  }
+}
+
+function saveSettings() {
+  try {
+    require('fs').writeFileSync(settingsPath(), JSON.stringify(settings, null, 2));
+  } catch (err) {
+    console.error('Could not save settings:', err.message);
+  }
+}
+
+ipcMain.handle('get-settings', () => settings);
+ipcMain.on('set-setting', (_event, key, value) => {
+  if (!Object.prototype.hasOwnProperty.call(DEFAULT_SETTINGS, key)) return;
+  settings[key] = value;
+  saveSettings();
+});
+
 // IMPORTANT: do not add your own session.defaultSession.webRequest
 // .onBeforeRequest listener. Electron allows exactly ONE listener per
 // webRequest event per session, and registering a second one silently
@@ -212,6 +254,8 @@ app.whenReady().then(() => {
   // its light one instead of clashing with the frame around it. Set this to
   // 'system' to follow the OS instead. (nativeTheme is unusable before ready.)
   nativeTheme.themeSource = 'light';
+
+  loadSettings();
 
   // Start the blocker before the window loads, so the very first page is
   // already covered. Failure here is logged, not fatal.
