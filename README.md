@@ -1,6 +1,6 @@
 # MiniBrowser
 
-A minimal Chromium-based web browser, built with Electron. ~550 lines total.
+A minimal Chromium-based web browser, built with Electron.
 
 Chromium renders the pages; everything around them is ours. Blocks ads and
 trackers by default, searches DuckDuckGo, strips tracking parameters from URLs,
@@ -9,10 +9,6 @@ and is styled in light monochrome so it looks nothing like Chrome.
 See [ROADMAP.md](ROADMAP.md) for what's planned and why.
 
 ## Run it
-
-> **Run this from Windows, not WSL.** If your prompt looks like
-> `smruti@Smruti:/mnt/c/Browser$`, you're in WSL — see the section below.
-
 Open **PowerShell** (or Command Prompt) in this folder:
 
 ```
@@ -65,8 +61,8 @@ it inside WSL isn't enough.
   |---|---|---|
   | **SearXNG** (default) | AGPL | General search. A metasearch engine — it fans your query out to ~270 upstreams and merges the results, so no single one builds a profile of you. |
   | **Marginalia** | AGPL | Finding actual writing. Its own crawler and index, tuned for text-heavy non-commercial pages. Superb for essays and old web; useless for weather or opening hours. |
-  | **DuckDuckGo** | Proprietary | The reliable fallback. Doesn't profile you, but you can't read its source. |
-
+  | **DuckDuckGo** | Proprietary | The reliable fallback. 
+  
   Both open-source options can be self-hosted. Google isn't in the list.
 - **Tracking parameters stripped** from URLs you navigate to — `utm_*`,
   `fbclid`, `gclid`, `msclkid`, `igshid`, `mc_eid` and ~25 more. They tell the
