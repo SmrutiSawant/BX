@@ -1,0 +1,237 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>MiniBrowser</title>
+<style>
+  :root {
+    --chrome-bg:      #202124;
+    --toolbar-bg:     #35363a;
+    --tab-active:     #35363a;
+    --tab-hover:      #292a2d;
+    --omnibox-bg:     #202124;
+    --omnibox-focus:  #292a2d;
+    --text:           #e8eaed;
+    --text-dim:       #9aa0a6;
+    --accent:         #8ab4f8;
+    --border:         #3c4043;
+  }
+
+  * { box-sizing: border-box; }
+
+  html, body {
+    margin: 0;
+    height: 100%;
+    overflow: hidden;
+    background: var(--chrome-bg);
+    color: var(--text);
+    font: 13px/1.4 system-ui, "Segoe UI", Roboto, sans-serif;
+    user-select: none;
+  }
+
+  #app { display: flex; flex-direction: column; height: 100%; }
+
+  /* ---------- Tab strip ---------- */
+  #tabstrip {
+    display: flex;
+    align-items: flex-end;
+    gap: 2px;
+    height: 40px;
+    padding: 6px 8px 0;
+    background: var(--chrome-bg);
+    flex: 0 0 auto;
+  }
+
+  #tabs {
+    display: flex;
+    align-items: flex-end;
+    gap: 2px;
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow: hidden;
+  }
+
+  .tab {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    height: 34px;
+    padding: 0 8px 0 12px;
+    min-width: 60px;
+    max-width: 220px;
+    flex: 1 1 200px;
+    border-radius: 8px 8px 0 0;
+    background: transparent;
+    cursor: default;
+    overflow: hidden;
+  }
+  .tab:hover { background: var(--tab-hover); }
+  .tab.active { background: var(--tab-active); }
+  .tab.active:hover { background: var(--tab-active); }
+
+  .favicon {
+    width: 16px; height: 16px;
+    flex: 0 0 16px;
+    border-radius: 3px;
+    object-fit: contain;
+  }
+  .favicon.blank { background: var(--border); }
+
+  .spinner {
+    width: 14px; height: 14px;
+    flex: 0 0 14px;
+    border: 2px solid var(--border);
+    border-top-color: var(--accent);
+    border-radius: 50%;
+    animation: spin .7s linear infinite;
+    display: none;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .tab.loading .spinner { display: block; }
+  .tab.loading .favicon { display: none; }
+
+  .tab-title {
+    flex: 1 1 auto;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    color: var(--text);
+  }
+  .tab:not(.active) .tab-title { color: var(--text-dim); }
+
+  .tab-close {
+    flex: 0 0 18px;
+    width: 18px; height: 18px;
+    display: grid; place-items: center;
+    border: 0; border-radius: 50%;
+    background: transparent;
+    color: var(--text-dim);
+    font-size: 15px; line-height: 1;
+    cursor: default;
+    opacity: 0;
+  }
+  .tab:hover .tab-close, .tab.active .tab-close { opacity: 1; }
+  .tab-close:hover { background: #5f6368; color: var(--text); }
+
+  #newtab {
+    flex: 0 0 30px;
+    width: 30px; height: 30px;
+    margin-bottom: 2px;
+    display: grid; place-items: center;
+    border: 0; border-radius: 50%;
+    background: transparent;
+    color: var(--text-dim);
+    font-size: 18px; line-height: 1;
+    cursor: default;
+  }
+  #newtab:hover { background: var(--tab-hover); color: var(--text); }
+
+  /* ---------- Toolbar ---------- */
+  #toolbar {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    height: 44px;
+    padding: 0 8px;
+    background: var(--toolbar-bg);
+    flex: 0 0 auto;
+  }
+
+  .navbtn {
+    flex: 0 0 30px;
+    width: 30px; height: 30px;
+    display: grid; place-items: center;
+    border: 0; border-radius: 50%;
+    background: transparent;
+    color: var(--text);
+    cursor: default;
+    padding: 0;
+  }
+  .navbtn:hover:not(:disabled) { background: rgba(255,255,255,.1); }
+  .navbtn:disabled { color: #5f6368; }
+  .navbtn svg { width: 16px; height: 16px; fill: currentColor; }
+
+  #omnibox {
+    flex: 1 1 auto;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    height: 30px;
+    margin: 0 6px;
+    padding: 0 14px;
+    border-radius: 15px;
+    background: var(--omnibox-bg);
+  }
+  #omnibox:focus-within { background: var(--omnibox-focus); box-shadow: 0 0 0 2px var(--accent); }
+
+  #lock { flex: 0 0 14px; width: 14px; height: 14px; fill: var(--text-dim); }
+  #lock.insecure { fill: #f28b82; }
+
+  #url {
+    flex: 1 1 auto;
+    min-width: 0;
+    border: 0;
+    outline: 0;
+    background: transparent;
+    color: var(--text);
+    font: inherit;
+    font-size: 13px;
+    user-select: text;
+  }
+  #url::placeholder { color: var(--text-dim); }
+
+  /* ---------- Page area ---------- */
+  #views {
+    flex: 1 1 auto;
+    position: relative;
+    background: #fff;
+    min-height: 0;
+  }
+  webview {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    display: none;
+    border: 0;
+  }
+  webview.active { display: flex; }
+</style>
+</head>
+<body>
+  <div id="app">
+
+    <div id="tabstrip">
+      <div id="tabs"></div>
+      <button id="newtab" title="New tab (Ctrl+T)">+</button>
+    </div>
+
+    <div id="toolbar">
+      <button class="navbtn" id="back" title="Back (Alt+Left)" disabled>
+        <svg viewBox="0 0 24 24"><path d="M20 11H7.8l5.6-5.6L12 4l-8 8 8 8 1.4-1.4L7.8 13H20z"/></svg>
+      </button>
+      <button class="navbtn" id="forward" title="Forward (Alt+Right)" disabled>
+        <svg viewBox="0 0 24 24"><path d="M4 13h12.2l-5.6 5.6L12 20l8-8-8-8-1.4 1.4 5.6 5.6H4z"/></svg>
+      </button>
+      <button class="navbtn" id="reload" title="Reload (Ctrl+R)">
+        <svg viewBox="0 0 24 24"><path d="M17.65 6.35A8 8 0 1 0 19.73 14h-2.08A6 6 0 1 1 12 6a5.9 5.9 0 0 1 4.22 1.78L13 11h7V4z"/></svg>
+      </button>
+      <button class="navbtn" id="home" title="Home">
+        <svg viewBox="0 0 24 24"><path d="M10 20v-6h4v6h5v-8h3L12 3 2 12h3v8z"/></svg>
+      </button>
+
+      <div id="omnibox">
+        <svg id="lock" viewBox="0 0 24 24">
+          <path d="M18 8h-1V6a5 5 0 0 0-10 0v2H6a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V10a2 2 0 0 0-2-2zM9 6a3 3 0 0 1 6 0v2H9zm3 13a2 2 0 1 1 0-4 2 2 0 0 1 0 4z"/>
+        </svg>
+        <input id="url" type="text" spellcheck="false" autocomplete="off"
+               placeholder="Search Google or type a URL" />
+      </div>
+    </div>
+
+    <div id="views"></div>
+  </div>
+
+  <script src="renderer.js"></script>
+</body>
+</html>
