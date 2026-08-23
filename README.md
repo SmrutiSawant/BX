@@ -24,6 +24,7 @@ After that, `npm start` launches instantly.
 - `target="_blank"` links open in a new tab instead of a popup window
 - Shortcuts: `Ctrl+T` new tab, `Ctrl+W` close, `Ctrl+L` address bar, `Ctrl+R` reload, `Ctrl+Tab` next tab, `Alt+←/→` history
 - `F12` opens devtools for whatever has focus — the browser UI or the page inside a tab
+- No OS title bar — window buttons sit in the tab strip, and the strip's empty space drags the window
 
 ## How it fits together
 
@@ -51,6 +52,15 @@ Deliberately left out to keep this readable:
 - Incognito (give the `<webview>` a `partition="in-memory"` attribute)
 - Shortcuts while focus is inside a page — a known `<webview>` limitation.
   Fixing it properly means registering accelerators via a `Menu` in `main.js`.
+
+## Two numbers that must stay in sync
+
+`titleBarOverlay` in `main.js` sets the colour and height of the native window
+buttons. Both have to match `#tabstrip` in `index.html` — `#202124` and `40px`
+— or the buttons sit on a mismatched strip. Change one, change the other.
+
+The strip's `padding-right: 148px` reserves space for those buttons. Shrink it
+and your tabs slide underneath them.
 
 ## Gotcha worth knowing
 

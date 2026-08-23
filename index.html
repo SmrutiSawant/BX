@@ -32,15 +32,27 @@
   #app { display: flex; flex-direction: column; height: 100%; }
 
   /* ---------- Tab strip ---------- */
+  /* With the OS title bar gone, this strip is the window's drag handle.
+     The big right padding clears the native minimize/maximize/close buttons,
+     which Electron paints over this area (titleBarOverlay in main.js). */
   #tabstrip {
     display: flex;
     align-items: flex-end;
     gap: 2px;
     height: 40px;
-    padding: 6px 8px 0;
+    padding: 6px 148px 0 8px;
     background: var(--chrome-bg);
     flex: 0 0 auto;
+    -webkit-app-region: drag;
   }
+
+  /* Anything clickable must opt out of the drag region, or it can't be
+     clicked — the OS swallows the press as a window move. */
+  .tab,
+  #newtab { -webkit-app-region: no-drag; }
+
+  /* Fullscreen hides the native caption buttons, so reclaim their space. */
+  body.fullscreen #tabstrip { padding-right: 8px; }
 
   #tabs {
     display: flex;

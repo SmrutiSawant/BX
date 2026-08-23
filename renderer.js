@@ -276,6 +276,9 @@ window.addEventListener('keydown', (e) => {
 // target="_blank" links, handed over from the main process.
 if (window.browserAPI) {
   window.browserAPI.onOpenNewTab((url) => createTab(url));
+  window.browserAPI.onFullScreen((on) => {
+    document.body.classList.toggle('fullscreen', on);
+  });
 }
 
 // canGoBack()/canGoForward() have no change event, so poll them. Cheap.
@@ -283,3 +286,30 @@ setInterval(syncToolbar, 400);
 
 createTab(HOME);
 urlInput.focus();
+
+// --- Temporary diagnostics. Delete this block once the UI is confirmed
+// --- working, along with the logging block in main.js.
+window.addEventListener('error', (e) => {
+  console.log('ERROR ' + e.message + ' @ ' + e.filename + ':' + e.lineno);
+});
+
+// Capture phase, so this fires even if something is swallowing the event
+// before it reaches the button's own handler.
+window.addEventListener('pointerdown', (e) => {
+  const t = e.target;
+  const name = t.id ? '#' + t.id
+    : t.className ? '.' + String(t.className).split(' ')[0]
+    : t.tagName;
+  console.log('pointerdown -> ' + name + ' @ ' + e.clientX + ',' + e.clientY);
+}, true);
+
+// Confirm each toolbar handler actually runs.
+for (const [name, el] of Object.entries({ back: backBtn, forward: forwardBtn,
+                                          reload: reloadBtn, home: homeBtn,
+                                          newtab: newTabBtn })) {
+  el.addEventListener('click', () => console.log('HANDLER FIRED: ' + name));
+}
+
+console.log('ui ready | window ' + window.innerWidth + 'x' + window.innerHeight
+  + ' | toolbar visible: ' + (document.getElementById('toolbar').offsetHeight > 0)
+  + ' | tabstrip visible: ' + (document.getElementById('tabstrip').offsetHeight > 0));
