@@ -2,16 +2,21 @@
 <html lang="en">
 <head>
 <meta charset="utf-8" />
+<meta http-equiv="Content-Security-Policy" content="default-src 'self' 'unsafe-inline' data: https:; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline';" />
 <title>New tab</title>
 <style>
+  /* Light monochrome, matching index.html. No hue anywhere.
+     --bg is pure white so this page sits flush inside the rounded page area
+     rather than showing as a panel within it. */
   :root {
-    --bg:      #202124;
-    --card:    #292a2d;
-    --card-hi: #35363a;
-    --text:    #e8eaed;
-    --dim:     #9aa0a6;
-    --accent:  #8ab4f8;
-    --border:  #3c4043;
+    --bg:      #ffffff;
+    --card:    #f2f2f2;
+    --card-hi: #e8e8e8;
+    --text:    #111111;
+    --dim:     #5f5f5f;
+    --faint:   #757575;  /* 4.6:1 on white — the footer hint stays readable */
+    --accent:  #111111;
+    --border:  #dcdcdc;
   }
 
   * { box-sizing: border-box; }
@@ -125,7 +130,7 @@
   footer {
     position: fixed;
     bottom: 18px;
-    color: #5f6368;
+    color: var(--faint);
     font-size: 12px;
   }
   kbd {
@@ -146,11 +151,12 @@
     <div id="greeting"></div>
   </div>
 
-  <!-- Submits straight to Google. No IPC needed: the form navigates this
-       webview, and the browser's address bar follows along automatically. -->
-  <form action="https://www.google.com/search" method="get" autocomplete="off">
+  <!-- Submits straight to DuckDuckGo. No IPC needed: the form navigates this
+       webview, and the browser's address bar follows along automatically.
+       Keep this in sync with SEARCH in renderer.js. -->
+  <form action="https://duckduckgo.com/" method="get" autocomplete="off">
     <svg viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27A6.47 6.47 0 0 0 16 9.5 6.5 6.5 0 1 0 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"/></svg>
-    <input name="q" type="text" placeholder="Search Google" autofocus spellcheck="false" />
+    <input name="q" type="text" placeholder="Search DuckDuckGo" autofocus spellcheck="false" />
   </form>
 
   <div id="links"></div>

@@ -1,12 +1,22 @@
 # MiniBrowser
 
-A minimal Chromium-based web browser, built with Electron. ~400 lines total.
+A minimal Chromium-based web browser, built with Electron. ~550 lines total.
+
+Chromium renders the pages; everything around them is ours. Blocks ads and
+trackers by default, searches DuckDuckGo, strips tracking parameters from URLs,
+and is styled in light monochrome so it looks nothing like Chrome.
+
+See [ROADMAP.md](ROADMAP.md) for what's planned and why.
 
 ## Run it
 
-Open a terminal in this folder:
+> **Run this from Windows, not WSL.** If your prompt looks like
+> `smruti@Smruti:/mnt/c/Browser$`, you're in WSL — see the section below.
+
+Open **PowerShell** (or Command Prompt) in this folder:
 
 ```
+cd C:\Browser
 npm install
 npm start
 ```
@@ -14,7 +24,46 @@ npm start
 The first `npm install` downloads Chromium (~200 MB) and takes a few minutes.
 After that, `npm start` launches instantly.
 
+## Why not WSL
+
+Electron installed from WSL is a **Linux** app. It draws through WSLg, a
+compatibility layer, which breaks things in ways that look like bugs in this
+code but aren't:
+
+| Symptom | Cause under WSL |
+|---|---|
+| Window won't fill the screen | WSLg reports its own virtual display, not your real monitor |
+| Choppy dragging, steppy scrolling | `GPU process exited unexpectedly` — no hardware acceleration |
+| Window buttons missing or dead | `titleBarOverlay` is a Windows-only API; it does nothing on Linux |
+
+The code now detects this and keeps the normal title bar on non-Windows, so it
+stays usable either way — but for the real thing, run it from Windows.
+
+**Switching from WSL to Windows:** `node_modules` holds Linux binaries and
+can't be reused. Delete it first, then reinstall from PowerShell:
+
+```
+rmdir /s /q node_modules
+npm install
+npm start
+```
+
+This needs Node.js installed on Windows itself (<https://nodejs.org>) — having
+it inside WSL isn't enough.
+
 ## What works
+
+**Privacy defaults**
+
+- **Ad and tracker blocking, on by default.** Real EasyList + EasyPrivacy rules
+  via `@ghostery/adblocker-electron` — the same lists uBlock Origin uses. The
+  toolbar shows a live count of what was blocked on the current page.
+- **DuckDuckGo, not Google**, in both the address bar and the new tab page.
+- **Tracking parameters stripped** from URLs you navigate to — `utm_*`,
+  `fbclid`, `gclid`, `msclkid`, `igshid`, `mc_eid` and ~25 more. They tell the
+  sender who clicked and change nothing about the page you get.
+
+**Browsing**
 
 - Custom new tab page — clock, greeting, search box, quick links. Local, so launch is instant and offline.
 - Multiple tabs — new, close, switch, middle-click to close
@@ -25,6 +74,7 @@ After that, `npm start` launches instantly.
 - Shortcuts: `Ctrl+T` new tab, `Ctrl+W` close, `Ctrl+L` address bar, `Ctrl+R` reload, `Ctrl+Tab` next tab, `Alt+←/→` history
 - `F12` opens devtools for whatever has focus — the browser UI or the page inside a tab
 - No OS title bar — window buttons sit in the tab strip, and the strip's empty space drags the window
+- Light monochrome UI, rounded pill tabs, and the page floating inside an 8px gutter
 
 ## How it fits together
 
@@ -35,6 +85,7 @@ After that, `npm start` launches instantly.
 | `index.html` | The browser "chrome" — tab strip, toolbar, styling. |
 | `renderer.js` | Tab management, URL parsing, navigation, shortcuts. |
 | `newtab.html` | The new tab page. Self-contained; edit `LINKS` to change the tiles. |
+| `ROADMAP.md` | Where this goes next, and what each step costs. |
 
 The key idea: **you are not writing a rendering engine.** Each tab is a
 `<webview>` element, which Electron backs with a full, sandboxed Chromium
@@ -56,11 +107,29 @@ Deliberately left out to keep this readable:
 ## Two numbers that must stay in sync
 
 `titleBarOverlay` in `main.js` sets the colour and height of the native window
-buttons. Both have to match `#tabstrip` in `index.html` — `#202124` and `40px`
-— or the buttons sit on a mismatched strip. Change one, change the other.
+buttons. Both have to match `#tabstrip` in `index.html` — `#e6e6e6` and `40px`
+— or the buttons sit on a mismatched strip. Its `symbolColor` (`#111111`) has
+to match `--text`. Change one, change the other.
+
+`backgroundColor` on the window should match `body` (`--toolbar-bg`, `#f7f7f7`),
+which is what shows in the gutter around the floating page. And `nativeTheme
+.themeSource` is pinned to `'light'` so sites that honour `prefers-color-scheme`
+match the frame — set it to `'system'` if you'd rather follow the OS.
 
 The strip's `padding-right: 148px` reserves space for those buttons. Shrink it
 and your tabs slide underneath them.
+
+## Only one webRequest listener per session
+
+Electron allows exactly **one** listener per `webRequest` event per session.
+The ad blocker owns `session.defaultSession.webRequest.onBeforeRequest`, so
+registering your own silently replaces it and blocking stops working — with no
+error to tell you.
+
+That's why tracking-parameter stripping lives in `renderer.js` rather than in a
+`onBeforeRequest` redirect, where it would otherwise belong. If you need to
+inspect requests, either use a different session partition or hook the
+blocker's own events (`request-blocked`, `request-allowed`, …).
 
 ## Gotcha worth knowing
 

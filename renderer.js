@@ -9,12 +9,20 @@
 // works no matter where the folder lives on disk.
 const NEWTAB = new URL('newtab.html', location.href).href;
 const HOME = NEWTAB;
-const SEARCH = (q) => 'https://www.google.com/search?q=' + encodeURIComponent(q);
+
+// Not Google. DuckDuckGo doesn't log searches or build a profile from them,
+// which is the whole reason this browser exists.
+const SEARCH = (q) => 'https://duckduckgo.com/?q=' + encodeURIComponent(q);
+
+// The preload bridge. Guarded so the UI still runs if it's ever missing.
+const API = window.browserAPI || {};
 
 const tabsEl   = document.getElementById('tabs');
 const viewsEl  = document.getElementById('views');
 const urlInput = document.getElementById('url');
 const lockIcon = document.getElementById('lock');
+const shieldEl = document.getElementById('shield');
+const blockEl  = document.getElementById('blockcount');
 
 const backBtn    = document.getElementById('back');
 const forwardBtn = document.getElementById('forward');
@@ -27,6 +35,61 @@ let tabs = [];
 let activeId = null;
 let nextId = 1;
 let urlEdited = false; // don't stomp on what the user is typing
+
+// ---------------------------------------------------------------------------
+// Tracking-parameter stripping
+// ---------------------------------------------------------------------------
+// None of these change what page you get — they exist only to tell the sender
+// who clicked. Firefox strips them; Chrome does not.
+//
+// Why here and not in main.js: the obvious place would be a webRequest
+// .onBeforeRequest redirect, but Electron allows only ONE listener per
+// webRequest event per session, and the ad blocker already owns it.
+// Registering a second listener would silently disable blocking. So we clean
+// URLs at the points where WE start a navigation instead.
+
+const TRACKING_PARAMS = [
+  /^utm_/i,            // Google Analytics, near-universal
+  /^ga_/i,
+  /^fbclid$/i, /^igshid$/i,                 // Meta
+  /^gclid$/i, /^dclid$/i, /^gbraid$/i, /^wbraid$/i, /^gclsrc$/i,  // Google Ads
+  /^msclkid$/i,                             // Microsoft
+  /^twclid$/i, /^ref_src$/i, /^ref_url$/i,  // X/Twitter
+  /^ttclid$/i,                              // TikTok
+  /^li_fat_id$/i,                           // LinkedIn
+  /^yclid$/i,                               // Yandex
+  /^epik$/i,                                // Pinterest
+  /^mc_eid$/i, /^mc_cid$/i,                 // Mailchimp
+  /^_hsenc$/i, /^_hsmi$/i, /^hsCtaTracking$/i,  // HubSpot
+  /^mkt_tok$/i,                             // Marketo
+  /^vero_id$/i, /^vero_conv$/i,             // Vero
+  /^oly_enc_id$/i, /^oly_anon_id$/i,        // Omeda
+  /^s_kwcid$/i, /^ef_id$/i,                 // Adobe
+  /^icid$/i, /^ncid$/i,
+];
+
+function stripTracking(url) {
+  try {
+    const u = new URL(url);
+    // Only touch web URLs — never file:// (the new tab page) or about:.
+    if (u.protocol !== 'https:' && u.protocol !== 'http:') return url;
+
+    let changed = false;
+    // Snapshot the keys first; deleting while iterating skips entries.
+    for (const key of [...u.searchParams.keys()]) {
+      if (TRACKING_PARAMS.some((re) => re.test(key))) {
+        u.searchParams.delete(key);
+        changed = true;
+      }
+    }
+    if (!changed) return url;
+
+    // Drop a now-empty '?' so the address bar stays clean.
+    return u.searchParams.toString() ? u.href : u.href.replace(/\?$/, '');
+  } catch {
+    return url;  // not parseable — leave it alone
+  }
+}
 
 // ---------------------------------------------------------------------------
 // Omnibox: decide whether input is a URL or a search query
@@ -44,11 +107,11 @@ function normalizeUrl(raw) {
 
   // Already has a scheme: about:blank, file:///, https://...
   // The (?!\d) stops "foo:1234" from being mistaken for one.
-  if (/^[a-z][a-z0-9+.-]*:(?!\d)/i.test(s)) return s;
+  if (/^[a-z][a-z0-9+.-]*:(?!\d)/i.test(s)) return stripTracking(s);
 
   // Looks like a bare domain: example.com, www.foo.co.uk/bar
   // (a space anywhere before the first slash means it's a search)
-  if (/^[^\s/?#]+\.[a-z]{2,}([/?#]|$)/i.test(s)) return 'https://' + s;
+  if (/^[^\s/?#]+\.[a-z]{2,}([/?#]|$)/i.test(s)) return stripTracking('https://' + s);
 
   return SEARCH(s);
 }
@@ -57,6 +120,26 @@ function normalizeUrl(raw) {
 function prettyUrl(url) {
   if (!url || url === 'about:blank' || url.startsWith(NEWTAB)) return '';
   return url;
+}
+
+// ---------------------------------------------------------------------------
+// Ad blocker counter
+// ---------------------------------------------------------------------------
+// Main sends counts keyed by webContents id; each <webview> reports its own
+// via getWebContentsId(), which is how we line them up.
+
+let blockCounts = new Map();
+
+function webContentsIdOf(tab) {
+  try { return tab.view.getWebContentsId(); } catch { return null; }
+}
+
+function syncShield() {
+  const tab = activeTab();
+  const wcId = tab ? webContentsIdOf(tab) : null;
+  const n = wcId === null ? 0 : (blockCounts.get(wcId) || 0);
+  blockEl.textContent = String(n);
+  shieldEl.classList.toggle('on', n > 0);
 }
 
 // ---------------------------------------------------------------------------
@@ -73,6 +156,7 @@ function activeTab() {
 
 function createTab(url = HOME, { activate = true } = {}) {
   const id = nextId++;
+  url = stripTracking(url);
 
   // --- the page itself ---
   const view = document.createElement('webview');
@@ -146,7 +230,20 @@ function createTab(url = HOME, { activate = true } = {}) {
     if (e.url) tab.url = e.url;
     if (id === activeId) { urlEdited = false; syncToolbar(); }
   };
-  view.addEventListener('did-navigate', onNavigate);
+
+  view.addEventListener('did-navigate', (e) => {
+    // New page, fresh count. Clear both sides so the toolbar doesn't briefly
+    // show the previous page's total.
+    const wcId = webContentsIdOf(tab);
+    if (wcId !== null) {
+      blockCounts.delete(wcId);
+      if (API.resetBlockCount) API.resetBlockCount(wcId);
+    }
+    onNavigate(e);
+  });
+
+  // In-page navigation (SPA route changes) keeps the same document, so the
+  // block count stays.
   view.addEventListener('did-navigate-in-page', (e) => { if (e.isMainFrame) onNavigate(e); });
 
   view.addEventListener('did-fail-load', (e) => {
@@ -217,7 +314,14 @@ function syncToolbar() {
   if (!urlEdited && document.activeElement !== urlInput) {
     urlInput.value = prettyUrl(tab.url);
   }
-  lockIcon.classList.toggle('insecure', !/^https:/i.test(tab.url));
+
+  // The padlock becomes a warning triangle on plain http. Shape, not colour —
+  // the palette is monochrome and shape is colourblind-safe anyway.
+  const insecure = !/^https:/i.test(tab.url) && !tab.url.startsWith(NEWTAB);
+  lockIcon.classList.toggle('insecure', insecure);
+  lockIcon.setAttribute('title', insecure ? 'Not secure — this connection is unencrypted' : 'Secure connection');
+
+  syncShield();
 }
 
 function navigate(input) {
@@ -273,12 +377,19 @@ window.addEventListener('keydown', (e) => {
   else if (e.altKey && e.key === 'ArrowRight') { e.preventDefault(); try { activeTab().view.goForward(); } catch {} }
 });
 
-// target="_blank" links, handed over from the main process.
-if (window.browserAPI) {
-  window.browserAPI.onOpenNewTab((url) => createTab(url));
-  window.browserAPI.onFullScreen((on) => {
-    document.body.classList.toggle('fullscreen', on);
-  });
+// --- Bridges from the main process ---
+if (API.hasTitleBarOverlay) {
+  document.body.classList.add('has-overlay');
+}
+if (API.onOpenNewTab) {
+  // target="_blank" links, handed over from the main process.
+  API.onOpenNewTab((url) => createTab(url));
+}
+if (API.onFullScreen) {
+  API.onFullScreen((on) => document.body.classList.toggle('fullscreen', on));
+}
+if (API.onBlockCounts) {
+  API.onBlockCounts((counts) => { blockCounts = counts; syncShield(); });
 }
 
 // canGoBack()/canGoForward() have no change event, so poll them. Cheap.
@@ -286,30 +397,3 @@ setInterval(syncToolbar, 400);
 
 createTab(HOME);
 urlInput.focus();
-
-// --- Temporary diagnostics. Delete this block once the UI is confirmed
-// --- working, along with the logging block in main.js.
-window.addEventListener('error', (e) => {
-  console.log('ERROR ' + e.message + ' @ ' + e.filename + ':' + e.lineno);
-});
-
-// Capture phase, so this fires even if something is swallowing the event
-// before it reaches the button's own handler.
-window.addEventListener('pointerdown', (e) => {
-  const t = e.target;
-  const name = t.id ? '#' + t.id
-    : t.className ? '.' + String(t.className).split(' ')[0]
-    : t.tagName;
-  console.log('pointerdown -> ' + name + ' @ ' + e.clientX + ',' + e.clientY);
-}, true);
-
-// Confirm each toolbar handler actually runs.
-for (const [name, el] of Object.entries({ back: backBtn, forward: forwardBtn,
-                                          reload: reloadBtn, home: homeBtn,
-                                          newtab: newTabBtn })) {
-  el.addEventListener('click', () => console.log('HANDLER FIRED: ' + name));
-}
-
-console.log('ui ready | window ' + window.innerWidth + 'x' + window.innerHeight
-  + ' | toolbar visible: ' + (document.getElementById('toolbar').offsetHeight > 0)
-  + ' | tabstrip visible: ' + (document.getElementById('tabstrip').offsetHeight > 0));

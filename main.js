@@ -2,84 +2,100 @@
 // This owns the OS window. The actual web pages are rendered by Chromium
 // inside <webview> elements that live in index.html.
 
-const { app, BrowserWindow, shell, screen } = require('electron');
+const { app, BrowserWindow, shell, screen, session, ipcMain, nativeTheme } = require('electron');
 const path = require('path');
 
 // --- Chromium switches. Must be set before the app is ready. ---
 
+// True only for a native Windows build. Under WSL, Electron is a LINUX app
+// drawn through WSLg, so process.platform is 'linux' and every Windows-only
+// window feature below is correctly skipped.
+const isWindows = process.platform === 'win32';
+
 // Animated, per-pixel scrolling instead of jumping a chunk per wheel notch.
 app.commandLine.appendSwitch('enable-smooth-scrolling');
 
-// Windows periodically checks whether the window is covered by another window
-// so it can throttle painting. That check stutters badly while a frameless
-// window is being dragged. Turning it off costs a little idle CPU and is the
-// standard fix for choppy drag in Electron on Windows.
-app.commandLine.appendSwitch('disable-features', 'CalculateNativeWinOcclusion');
+if (isWindows) {
+  // Windows periodically checks whether the window is covered by another
+  // window so it can throttle painting. That check stutters badly while a
+  // frameless window is dragged. Disabling it is the standard fix.
+  app.commandLine.appendSwitch('disable-features', 'CalculateNativeWinOcclusion');
+}
 
 let mainWindow = null;
 
-// --- Temporary diagnostics. Delete this block, writeDiagnostics(), and the
-// --- probe at the bottom of renderer.js once the UI is confirmed working.
-const LOG = path.join(__dirname, 'browser-log.txt');
+// ---------------------------------------------------------------------------
+// Ad and tracker blocking
+// ---------------------------------------------------------------------------
+// The one feature Chrome structurally cannot ship: Google earns roughly
+// three-quarters of its revenue from advertising. We have no such conflict.
+//
+// @ghostery/adblocker-electron parses real EasyList + EasyPrivacy filter
+// lists, the same rules uBlock Origin uses, and installs itself onto the
+// session's request pipeline.
 
-function logLine(line) {
-  try {
-    require('fs').appendFileSync(LOG, new Date().toISOString().slice(11, 23) + '  ' + line + '\n');
-  } catch { /* logging must never break the app */ }
+// tabId (a webContents id) -> number of requests blocked since that tab last
+// navigated. Displayed in the toolbar as visible proof the blocker is working.
+const blockCounts = new Map();
+let flushTimer = null;
+
+// Blocked requests arrive in bursts — dozens per page. Batch the IPC so a
+// heavy ad page doesn't spam the renderer hundreds of times a second.
+function scheduleFlush() {
+  if (flushTimer) return;
+  flushTimer = setTimeout(() => {
+    flushTimer = null;
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('block-counts', [...blockCounts]);
+    }
+  }, 250);
 }
 
-function attachLogging(win) {
-  try { require('fs').writeFileSync(LOG, ''); } catch {}
-
-  // Electron changed this signature across versions: older passes
-  // (event, level, message, ...), newer passes a single event object.
-  win.webContents.on('console-message', (...args) => {
-    const first = args[0];
-    const message = first && typeof first === 'object' && 'message' in first
-      ? first.message
-      : args[2];
-    logLine('[ui] ' + message);
-  });
-
-  win.on('resize', () => logLine('[win] resize -> ' + JSON.stringify(win.getBounds())));
-  win.on('maximize', () => logLine('[win] maximize -> ' + JSON.stringify(win.getBounds())));
-  win.on('unmaximize', () => logLine('[win] unmaximize'));
-  win.on('enter-full-screen', () => logLine('[win] enter-full-screen'));
-  win.on('leave-full-screen', () => logLine('[win] leave-full-screen'));
-}
-
-// Dumps real display + window measurements to window-debug.txt next to this
-// file. Purely diagnostic — safe to delete this function and its call.
-function writeDiagnostics() {
+async function setupAdBlocker() {
   try {
-    const out = {
-      electron: process.versions.electron,
-      chrome: process.versions.chrome,
-      platform: process.platform,
-      displays: screen.getAllDisplays().map((d, i) => ({
-        index: i,
-        primary: d.id === screen.getPrimaryDisplay().id,
-        scaleFactor: d.scaleFactor,
-        bounds: d.bounds,
-        workArea: d.workArea,
-      })),
-      window: {
-        bounds: mainWindow.getBounds(),
-        contentBounds: mainWindow.getContentBounds(),
-        isMaximized: mainWindow.isMaximized(),
-        isFullScreen: mainWindow.isFullScreen(),
-        isResizable: mainWindow.isResizable(),
-      },
-    };
-    require('fs').writeFileSync(
-      path.join(__dirname, 'window-debug.txt'),
-      JSON.stringify(out, null, 2),
-      'utf8'
-    );
+    const { ElectronBlocker } = require('@ghostery/adblocker-electron');
+    const fs = require('fs/promises');
+
+    // Cache the compiled engine in userData. Without this, ~2 MB of filter
+    // lists is re-downloaded on every launch; with it, startup is instant
+    // after the first run and the browser works offline.
+    const cachePath = path.join(app.getPath('userData'), 'adblocker-engine.bin');
+
+    // Electron 32 runs Node 20, which has fetch globally — the package README
+    // imports 'cross-fetch' only for older runtimes.
+    const blocker = await ElectronBlocker.fromPrebuiltAdsAndTracking(fetch, {
+      path: cachePath,
+      read: fs.readFile,
+      write: fs.writeFile,
+    });
+    blocker.enableBlockingInSession(session.defaultSession);
+
+    blocker.on('request-blocked', (request) => {
+      const id = request.tabId;
+      if (typeof id !== 'number' || id < 0) return;
+      blockCounts.set(id, (blockCounts.get(id) || 0) + 1);
+      scheduleFlush();
+    });
+
+    return true;
   } catch (err) {
-    console.error('diagnostics failed:', err);
+    // A missing dependency or a failed list download must not stop the
+    // browser from starting — it just starts without blocking.
+    console.error('Ad blocker failed to start:', err.message);
+    return false;
   }
 }
+
+// The renderer resets a tab's counter when that tab navigates.
+ipcMain.on('reset-block-count', (_event, tabId) => {
+  blockCounts.delete(tabId);
+});
+
+// IMPORTANT: do not add your own session.defaultSession.webRequest
+// .onBeforeRequest listener. Electron allows exactly ONE listener per
+// webRequest event per session, and registering a second one silently
+// replaces the blocker's. That is why tracking-parameter stripping lives in
+// renderer.js instead of here.
 
 function createWindow() {
   // Size against the display's work area (screen minus taskbar), not fixed
@@ -95,18 +111,21 @@ function createWindow() {
     minWidth: 640,
     minHeight: 400,
     title: 'MiniBrowser',
-    backgroundColor: '#202124',
+    backgroundColor: '#f7f7f7',  // matches body — prevents a flash on open
     autoHideMenuBar: true,
 
-    // No OS title bar. On Windows, titleBarOverlay still paints the real
-    // minimize/maximize/close buttons over the top-right of our own UI, so
-    // snapping and double-click-to-maximize keep working.
-    titleBarStyle: 'hidden',
-    titleBarOverlay: {
-      color: '#202124',        // must match #tabstrip's background
-      symbolColor: '#e8eaed',
-      height: 40,              // must match #tabstrip's height
-    },
+    // Hiding the title bar is only safe on Windows, where titleBarOverlay
+    // repaints the real minimize/maximize/close buttons over our own UI.
+    // Elsewhere (Linux, WSL) that API does nothing, and hiding the bar would
+    // leave a window with no way to close it — so keep the native frame.
+    ...(isWindows ? {
+      titleBarStyle: 'hidden',
+      titleBarOverlay: {
+        color: '#e6e6e6',        // must match #tabstrip's background
+        symbolColor: '#111111',  // must match --text
+        height: 40,              // must match #tabstrip's height
+      },
+    } : {}),
 
     // Don't paint until the first frame is ready — avoids a white flash.
     show: false,
@@ -122,8 +141,6 @@ function createWindow() {
     },
   });
 
-  attachLogging(mainWindow);
-
   mainWindow.once('ready-to-show', () => {
     // show() BEFORE maximize(). Maximizing a window that is still hidden is
     // unreliable on Windows — the request is often dropped.
@@ -138,7 +155,6 @@ function createWindow() {
       if (b.width < wa.width || b.height < wa.height || b.x !== wa.x || b.y !== wa.y) {
         mainWindow.setBounds(wa);
       }
-      writeDiagnostics();
     }, 600);
   });
 
@@ -174,6 +190,9 @@ app.on('web-contents-created', (_event, contents) => {
 
   if (contents.getType() !== 'webview') return;
 
+  // A closed tab's block count would otherwise leak for the life of the app.
+  contents.on('destroyed', () => blockCounts.delete(contents.id));
+
   contents.setWindowOpenHandler(({ url }) => {
     if (/^https?:\/\//i.test(url)) {
       if (mainWindow && !mainWindow.isDestroyed()) {
@@ -188,6 +207,15 @@ app.on('web-contents-created', (_event, contents) => {
 });
 
 app.whenReady().then(() => {
+  // The browser chrome is light, so pages should be too. This is what sites
+  // see through `prefers-color-scheme`, so one offering both variants picks
+  // its light one instead of clashing with the frame around it. Set this to
+  // 'system' to follow the OS instead. (nativeTheme is unusable before ready.)
+  nativeTheme.themeSource = 'light';
+
+  // Start the blocker before the window loads, so the very first page is
+  // already covered. Failure here is logged, not fatal.
+  setupAdBlocker();
   createWindow();
 
   app.on('activate', () => {

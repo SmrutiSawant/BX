@@ -2,28 +2,43 @@
 <html lang="en">
 <head>
 <meta charset="utf-8" />
+<meta http-equiv="Content-Security-Policy" content="default-src 'self' 'unsafe-inline' data: https:; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline';" />
 <title>MiniBrowser</title>
 <style>
+  /* ---------- Palette ----------
+     Light, and strictly monochrome. Chrome's identity is its blue-grey
+     neutrals and the #8ab4f8 accent; there is no hue anywhere here, so
+     nothing can read as Chrome.
+
+     The value order is: tab strip recessed grey, toolbar a shade lighter,
+     active tab pure white so it lifts off the strip.
+
+     Two values are mirrored in main.js and must be changed together:
+     --chrome-bg matches titleBarOverlay.color, --text matches symbolColor. */
   :root {
-    --chrome-bg:      #202124;
-    --toolbar-bg:     #35363a;
-    --tab-active:     #35363a;
-    --tab-hover:      #292a2d;
-    --omnibox-bg:     #202124;
-    --omnibox-focus:  #292a2d;
-    --text:           #e8eaed;
-    --text-dim:       #9aa0a6;
-    --accent:         #8ab4f8;
-    --border:         #3c4043;
+    --chrome-bg:      #e6e6e6;
+    --toolbar-bg:     #f7f7f7;
+    --tab-active:     #ffffff;
+    --tab-hover:      #efefef;
+    --omnibox-bg:     #ebebeb;
+    --omnibox-focus:  #e2e2e2;
+    --text:           #111111;
+    --text-dim:       #5f5f5f;
+    --text-faint:     #a6a6a6;  /* disabled controls only */
+    --accent:         #111111;
+    --border:         #d4d4d4;
   }
 
   * { box-sizing: border-box; }
 
+  /* The gutter around the floating page area shows through from here, so it
+     matches the toolbar directly above it — using --chrome-bg would leave a
+     visible seam where the toolbar ends. */
   html, body {
     margin: 0;
     height: 100%;
     overflow: hidden;
-    background: var(--chrome-bg);
+    background: var(--toolbar-bg);
     color: var(--text);
     font: 13px/1.4 system-ui, "Segoe UI", Roboto, sans-serif;
     user-select: none;
@@ -40,11 +55,16 @@
     align-items: flex-end;
     gap: 2px;
     height: 40px;
-    padding: 6px 148px 0 8px;
+    padding: 6px 8px 0;
     background: var(--chrome-bg);
     flex: 0 0 auto;
     -webkit-app-region: drag;
   }
+
+  /* Only on Windows do native caption buttons sit over this strip, so only
+     there do we reserve room for them. Elsewhere the window keeps its normal
+     title bar and the tabs can use the full width. */
+  body.has-overlay #tabstrip { padding-right: 148px; }
 
   /* Anything clickable must opt out of the drag region, or it can't be
      clicked — the OS swallows the press as a window move. */
@@ -63,16 +83,20 @@
     overflow: hidden;
   }
 
+  /* Detached rounded pills, not Chrome's fused-to-the-toolbar trapezoids.
+     The active tab is marked by a lighter fill rather than by merging into
+     the row below it. */
   .tab {
     display: flex;
     align-items: center;
     gap: 8px;
-    height: 34px;
+    height: 30px;
+    margin-bottom: 4px;
     padding: 0 8px 0 12px;
     min-width: 60px;
     max-width: 220px;
     flex: 1 1 200px;
-    border-radius: 8px 8px 0 0;
+    border-radius: 15px;
     background: transparent;
     cursor: default;
     overflow: hidden;
@@ -123,12 +147,12 @@
     opacity: 0;
   }
   .tab:hover .tab-close, .tab.active .tab-close { opacity: 1; }
-  .tab-close:hover { background: #5f6368; color: var(--text); }
+  .tab-close:hover { background: var(--border); color: var(--text); }
 
   #newtab {
     flex: 0 0 30px;
     width: 30px; height: 30px;
-    margin-bottom: 2px;
+    margin-bottom: 4px;
     display: grid; place-items: center;
     border: 0; border-radius: 50%;
     background: transparent;
@@ -159,8 +183,8 @@
     cursor: default;
     padding: 0;
   }
-  .navbtn:hover:not(:disabled) { background: rgba(255,255,255,.1); }
-  .navbtn:disabled { color: #5f6368; }
+  .navbtn:hover:not(:disabled) { background: rgba(0,0,0,.08); }
+  .navbtn:disabled { color: var(--text-faint); }
   .navbtn svg { width: 16px; height: 16px; fill: currentColor; }
 
   #omnibox {
@@ -176,8 +200,14 @@
   }
   #omnibox:focus-within { background: var(--omnibox-focus); box-shadow: 0 0 0 2px var(--accent); }
 
+  /* Security state is signalled by SHAPE, not colour — a padlock or a warning
+     triangle. A monochrome palette can't lean on red, and shape is legible to
+     colourblind users anyway. */
   #lock { flex: 0 0 14px; width: 14px; height: 14px; fill: var(--text-dim); }
-  #lock.insecure { fill: #f28b82; }
+  #lock .warn { display: none; }
+  #lock.insecure { fill: var(--text); }
+  #lock.insecure .shut { display: none; }
+  #lock.insecure .warn { display: block; }
 
   #url {
     flex: 1 1 auto;
@@ -192,10 +222,34 @@
   }
   #url::placeholder { color: var(--text-dim); }
 
+  /* Blocked-request counter. Hidden until something is actually blocked, so
+     it reads as a result rather than as chrome. */
+  #shield {
+    display: none;
+    align-items: center;
+    gap: 5px;
+    height: 24px;
+    padding: 0 9px 0 7px;
+    margin-right: 2px;
+    border-radius: 12px;
+    background: rgba(0,0,0,.06);
+    color: var(--text);
+    cursor: default;
+  }
+  #shield.on { display: flex; }
+  #shield svg { width: 13px; height: 13px; fill: currentColor; flex: 0 0 13px; }
+  #shield span { font-size: 11px; font-variant-numeric: tabular-nums; }
+
   /* ---------- Page area ---------- */
+  /* The page floats inside the window instead of filling it edge to edge —
+     an 8px gutter of pure black on three sides, with rounded corners. */
   #views {
     flex: 1 1 auto;
     position: relative;
+    margin: 0 8px 8px;
+    border-radius: 10px;
+    overflow: hidden;
+    box-shadow: 0 0 0 1px var(--border);
     background: #fff;
     min-height: 0;
   }
@@ -205,6 +259,8 @@
   .view-wrap {
     position: absolute;
     inset: 0;
+    border-radius: inherit;
+    overflow: hidden;
     display: none;
   }
   .view-wrap.active { display: block; }
@@ -241,10 +297,16 @@
 
       <div id="omnibox">
         <svg id="lock" viewBox="0 0 24 24">
-          <path d="M18 8h-1V6a5 5 0 0 0-10 0v2H6a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V10a2 2 0 0 0-2-2zM9 6a3 3 0 0 1 6 0v2H9zm3 13a2 2 0 1 1 0-4 2 2 0 0 1 0 4z"/>
+          <path class="shut" d="M18 8h-1V6a5 5 0 0 0-10 0v2H6a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V10a2 2 0 0 0-2-2zM9 6a3 3 0 0 1 6 0v2H9zm3 13a2 2 0 1 1 0-4 2 2 0 0 1 0 4z"/>
+          <path class="warn" d="M1 21h22L12 2 1 21zm12-3h-2v-2h2v2zm0-4h-2v-4h2v4z"/>
         </svg>
         <input id="url" type="text" spellcheck="false" autocomplete="off"
-               placeholder="Search Google or type a URL" />
+               placeholder="Search DuckDuckGo or type a URL" />
+      </div>
+
+      <div id="shield" title="Ads and trackers blocked on this page">
+        <svg viewBox="0 0 24 24"><path d="M12 1 3 5v6c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V5l-9-4z"/></svg>
+        <span id="blockcount">0</span>
       </div>
     </div>
 
