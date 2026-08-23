@@ -5,7 +5,10 @@
 //   .el    the little tab button up in the tab strip
 // Everything else is bookkeeping to keep those two in sync with the toolbar.
 
-const HOME = 'https://www.google.com';
+// The new tab page ships with the app. Resolved relative to index.html so it
+// works no matter where the folder lives on disk.
+const NEWTAB = new URL('newtab.html', location.href).href;
+const HOME = NEWTAB;
 const SEARCH = (q) => 'https://www.google.com/search?q=' + encodeURIComponent(q);
 
 const tabsEl   = document.getElementById('tabs');
@@ -19,7 +22,7 @@ const reloadBtn  = document.getElementById('reload');
 const homeBtn    = document.getElementById('home');
 const newTabBtn  = document.getElementById('newtab');
 
-/** @type {Array<{id:number, view:Element, el:Element, titleEl:Element, iconEl:Element, url:string, title:string}>} */
+/** @type {Array<{id:number, view:Element, wrap:Element, el:Element, titleEl:Element, iconEl:Element, url:string, title:string}>} */
 let tabs = [];
 let activeId = null;
 let nextId = 1;
@@ -50,14 +53,10 @@ function normalizeUrl(raw) {
   return SEARCH(s);
 }
 
+// The address bar stays empty on the new tab page, the way Chrome's does.
 function prettyUrl(url) {
-  try {
-    const u = new URL(url);
-    if (u.protocol === 'about:' || url === 'about:blank') return '';
-    return url;
-  } catch {
-    return url;
-  }
+  if (!url || url === 'about:blank' || url.startsWith(NEWTAB)) return '';
+  return url;
 }
 
 // ---------------------------------------------------------------------------
@@ -79,10 +78,15 @@ function createTab(url = HOME, { activate = true } = {}) {
   const view = document.createElement('webview');
   view.setAttribute('src', url);
   view.setAttribute('allowpopups', '');
-  // Give every tab its own session partition? No — sharing one partition means
-  // logins carry across tabs, which is what people expect from a browser.
+  // All tabs share one session partition, so logins carry across tabs —
+  // which is what people expect from a browser.
 
-  viewsEl.appendChild(view);
+  // The wrapper is what gets shown/hidden. Toggling display on the <webview>
+  // itself breaks Electron's internal sizing — see the CSS note in index.html.
+  const wrap = document.createElement('div');
+  wrap.className = 'view-wrap';
+  wrap.appendChild(view);
+  viewsEl.appendChild(wrap);
 
   // --- the tab button ---
   const el = document.createElement('div');
@@ -107,7 +111,7 @@ function createTab(url = HOME, { activate = true } = {}) {
   el.append(spinner, iconEl, titleEl, closeEl);
   tabsEl.appendChild(el);
 
-  const tab = { id, view, el, titleEl, iconEl, url, title: 'New tab' };
+  const tab = { id, view, wrap, el, titleEl, iconEl, url, title: 'New tab' };
   tabs.push(tab);
 
   // --- wiring ---
@@ -166,7 +170,7 @@ function activateTab(id) {
   for (const t of tabs) {
     const on = t.id === id;
     t.el.classList.toggle('active', on);
-    t.view.classList.toggle('active', on);
+    t.wrap.classList.toggle('active', on);
   }
   syncToolbar();
 }
@@ -177,7 +181,7 @@ function closeTab(id) {
 
   const [tab] = tabs.splice(idx, 1);
   tab.el.remove();
-  tab.view.remove();
+  tab.wrap.remove();
 
   if (tabs.length === 0) {
     createTab(HOME);            // never leave the window empty

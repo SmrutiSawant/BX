@@ -16,12 +16,14 @@ After that, `npm start` launches instantly.
 
 ## What works
 
+- Custom new tab page — clock, greeting, search box, quick links. Local, so launch is instant and offline.
 - Multiple tabs — new, close, switch, middle-click to close
 - Address bar that tells URLs from search queries (`github.com` navigates, `how do browsers work` searches)
 - Back / forward / reload / stop / home
 - Live page titles and favicons in the tab strip, loading spinner
 - `target="_blank"` links open in a new tab instead of a popup window
 - Shortcuts: `Ctrl+T` new tab, `Ctrl+W` close, `Ctrl+L` address bar, `Ctrl+R` reload, `Ctrl+Tab` next tab, `Alt+←/→` history
+- `F12` opens devtools for whatever has focus — the browser UI or the page inside a tab
 
 ## How it fits together
 
@@ -31,6 +33,7 @@ After that, `npm start` launches instantly.
 | `preload.js` | The one safe bridge from main → UI. Exposes a single function. |
 | `index.html` | The browser "chrome" — tab strip, toolbar, styling. |
 | `renderer.js` | Tab management, URL parsing, navigation, shortcuts. |
+| `newtab.html` | The new tab page. Self-contained; edit `LINKS` to change the tiles. |
 
 The key idea: **you are not writing a rendering engine.** Each tab is a
 `<webview>` element, which Electron backs with a full, sandboxed Chromium
@@ -48,6 +51,14 @@ Deliberately left out to keep this readable:
 - Incognito (give the `<webview>` a `partition="in-memory"` attribute)
 - Shortcuts while focus is inside a page — a known `<webview>` limitation.
   Fixing it properly means registering accelerators via a `Menu` in `main.js`.
+
+## Gotcha worth knowing
+
+Do **not** set `display: none` on a `<webview>` to hide it. Electron relies on
+`display: flex` internally to size the guest page, and overriding it causes
+layout to misbehave. That's why each tab is wrapped in a `.view-wrap` div and
+the wrapper is what gets toggled. It's the first thing to check if the UI ever
+looks wrong.
 
 ## Known trade-off: `<webview>` vs `WebContentsView`
 

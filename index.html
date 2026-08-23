@@ -187,15 +187,22 @@
     background: #fff;
     min-height: 0;
   }
-  webview {
+  /* Each tab's page sits in a wrapper, and the WRAPPER is what we show/hide.
+     Electron requires <webview> to keep display:flex — overriding it (e.g.
+     with display:none) breaks how the guest page is measured and sized. */
+  .view-wrap {
     position: absolute;
     inset: 0;
+    display: none;
+  }
+  .view-wrap.active { display: block; }
+
+  webview {
+    display: flex;   /* required by Electron — do not override */
     width: 100%;
     height: 100%;
-    display: none;
     border: 0;
   }
-  webview.active { display: flex; }
 </style>
 </head>
 <body>

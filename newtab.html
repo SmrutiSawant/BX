@@ -1,0 +1,204 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>New tab</title>
+<style>
+  :root {
+    --bg:      #202124;
+    --card:    #292a2d;
+    --card-hi: #35363a;
+    --text:    #e8eaed;
+    --dim:     #9aa0a6;
+    --accent:  #8ab4f8;
+    --border:  #3c4043;
+  }
+
+  * { box-sizing: border-box; }
+
+  html, body {
+    margin: 0;
+    height: 100%;
+    background: var(--bg);
+    color: var(--text);
+    font: 14px/1.5 system-ui, "Segoe UI", Roboto, sans-serif;
+  }
+
+  body {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 28px;
+    padding: 40px 24px;
+  }
+
+  /* ---- clock ---- */
+  #clock {
+    font-size: 76px;
+    font-weight: 200;
+    letter-spacing: -2px;
+    line-height: 1;
+    font-variant-numeric: tabular-nums;
+  }
+  #date {
+    margin-top: 8px;
+    color: var(--dim);
+    font-size: 15px;
+  }
+  #greeting {
+    margin-top: 2px;
+    color: var(--dim);
+    font-size: 15px;
+  }
+  .head { text-align: center; }
+
+  /* ---- search ---- */
+  form {
+    width: 100%;
+    max-width: 560px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 0 20px;
+    height: 48px;
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 24px;
+    transition: background .15s, border-color .15s;
+  }
+  form:focus-within {
+    background: var(--card-hi);
+    border-color: var(--accent);
+  }
+  form svg { flex: 0 0 18px; width: 18px; height: 18px; fill: var(--dim); }
+  form input {
+    flex: 1 1 auto;
+    min-width: 0;
+    border: 0;
+    outline: 0;
+    background: transparent;
+    color: var(--text);
+    font: inherit;
+    font-size: 15px;
+  }
+  form input::placeholder { color: var(--dim); }
+
+  /* ---- quick links ---- */
+  #links {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, 92px);
+    justify-content: center;
+    gap: 10px;
+    width: 100%;
+    max-width: 560px;
+  }
+  #links a {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 9px;
+    padding: 16px 6px;
+    border-radius: 10px;
+    text-decoration: none;
+    color: var(--dim);
+    font-size: 12px;
+    transition: background .15s;
+  }
+  #links a:hover { background: var(--card); color: var(--text); }
+  .tile {
+    width: 42px; height: 42px;
+    display: grid; place-items: center;
+    border-radius: 50%;
+    background: var(--card-hi);
+    color: var(--text);
+    font-size: 17px;
+    font-weight: 600;
+  }
+  #links a span:last-child {
+    max-width: 80px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  footer {
+    position: fixed;
+    bottom: 18px;
+    color: #5f6368;
+    font-size: 12px;
+  }
+  kbd {
+    background: var(--card-hi);
+    border-radius: 4px;
+    padding: 1px 5px;
+    font: inherit;
+    font-size: 11px;
+    color: var(--dim);
+  }
+</style>
+</head>
+<body>
+
+  <div class="head">
+    <div id="clock">--:--</div>
+    <div id="date"></div>
+    <div id="greeting"></div>
+  </div>
+
+  <!-- Submits straight to Google. No IPC needed: the form navigates this
+       webview, and the browser's address bar follows along automatically. -->
+  <form action="https://www.google.com/search" method="get" autocomplete="off">
+    <svg viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27A6.47 6.47 0 0 0 16 9.5 6.5 6.5 0 1 0 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"/></svg>
+    <input name="q" type="text" placeholder="Search Google" autofocus spellcheck="false" />
+  </form>
+
+  <div id="links"></div>
+
+  <footer><kbd>Ctrl</kbd> + <kbd>L</kbd> to jump to the address bar</footer>
+
+<script>
+  // ---- clock + greeting ----
+  function tick() {
+    const now = new Date();
+    document.getElementById('clock').textContent =
+      now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    document.getElementById('date').textContent =
+      now.toLocaleDateString([], { weekday: 'long', month: 'long', day: 'numeric' });
+
+    const h = now.getHours();
+    const part = h < 5 ? 'night' : h < 12 ? 'morning' : h < 18 ? 'afternoon' : 'evening';
+    document.getElementById('greeting').textContent = 'Good ' + part + ', Smruti';
+  }
+  tick();
+  setInterval(tick, 10000);
+
+  // ---- quick links ----
+  // Edit this array to change your tiles.
+  const LINKS = [
+    { name: 'YouTube',   url: 'https://youtube.com' },
+    { name: 'GitHub',    url: 'https://github.com' },
+    { name: 'Gmail',     url: 'https://mail.google.com' },
+    { name: 'Wikipedia', url: 'https://wikipedia.org' },
+    { name: 'Reddit',    url: 'https://reddit.com' },
+    { name: 'Maps',      url: 'https://maps.google.com' },
+  ];
+
+  const wrap = document.getElementById('links');
+  for (const link of LINKS) {
+    const a = document.createElement('a');
+    a.href = link.url;
+
+    const tile = document.createElement('span');
+    tile.className = 'tile';
+    tile.textContent = link.name[0].toUpperCase();
+
+    const label = document.createElement('span');
+    label.textContent = link.name;
+
+    a.append(tile, label);
+    wrap.appendChild(a);
+  }
+</script>
+</body>
+</html>

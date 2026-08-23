@@ -31,6 +31,16 @@ function createWindow() {
 // When a page inside a <webview> tries to open a popup / target="_blank" link,
 // intercept it and hand the URL back to our UI so it opens as a new tab.
 app.on('web-contents-created', (_event, contents) => {
+  // F12 toggles devtools for whichever process has focus — the browser UI
+  // itself, or the page inside a tab. Handy for diagnosing layout issues.
+  contents.on('before-input-event', (event, input) => {
+    if (input.type === 'keyDown' && input.key === 'F12') {
+      event.preventDefault();
+      if (contents.isDevToolsOpened()) contents.closeDevTools();
+      else contents.openDevTools();
+    }
+  });
+
   if (contents.getType() !== 'webview') return;
 
   contents.setWindowOpenHandler(({ url }) => {
