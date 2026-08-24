@@ -32,6 +32,12 @@ advertising, so Chrome **cannot** ship default tracker blocking without cannibal
 its parent. You have no such constraint. This axis is cheap to build and impossible
 for Chrome to copy.
 
+**Status:** largely built. `privacy.js` now holds the session hardening, header
+scrubbing, permissions, HTTPS-only, DNS-over-HTTPS, download safety and the
+Chromium switches; every default is reversible from the shield in the toolbar.
+What's left on this axis is 1.5's named containers and the self-hosted SearXNG
+instance in 1.1. See the README for the measure-by-measure table.
+
 ### 1.1 Change the default search engine — ✅ *done*
 
 Google is gone. `SEARCH_ENGINES` in `renderer.js` holds three options — SearXNG
@@ -85,37 +91,66 @@ Nothing in `utm_source`, `utm_medium`, `fbclid`, `gclid`, `msclkid`, `igshid`, o
 the `did-navigate` handler so redirect-added params get cleaned too. Pure win, no
 site breakage in practice. Firefox ships this; Chrome does not.
 
-### 1.4 Default-deny notification permission — *1–2 hours*
+### 1.4 Default-deny permissions — ✅ *done*
 
-`session.setPermissionRequestHandler` in `main.js`. Chrome prompts for notifications
-and everyone clicks "block" anyway. Default-deny silently, with a small toolbar
-affordance to grant per-site. Do the same for geolocation, camera, mic, and
-`midi-sysex`. This is the kind of default that quietly changes daily browsing.
+`setPermissionRequestHandler` and its synchronous twin `setPermissionCheckHandler`
+now deny twenty permissions by default — location, camera, mic, screen share,
+clipboard reading, MIDI, USB, HID, serial, Bluetooth, idle detection and the rest —
+and `setDevicePermissionHandler` refuses hardware outright. Only `fullscreen`,
+`pointerLock` and sanitised clipboard *writes* are automatic.
 
-### 1.5 Per-site containers — *half a day*
+The interesting design choice was **denying silently**. Chrome prompts, which
+trained everyone to dismiss the prompt without reading it. Here the page is never
+interrupted; a dot appears on the shield, and the panel offers to grant per-site.
+The decision is available the moment you want it and invisible when you don't.
 
-Your `<webview>` elements currently share one session (`renderer.js`, `createTab`,
-noted in a comment). Give a tab `partition="persist:container-<name>"` and its cookies
-live in a separate jar — so a Facebook tab can't see your other tabs' cookies at all.
-Firefox's Multi-Account Containers is a beloved feature Chrome has never matched.
+Both handlers are needed. With only the async one, some APIs report themselves
+available and then fail at the point of use, which sites handle badly.
 
-Cheaper first step, already noted in your README: `partition="in-memory"` for a proper
-incognito tab.
+### 1.5 Per-site containers — 🟡 *private tabs done, named containers open*
 
-### 1.6 Disable Chromium's phone-home behaviour — *1 hour*
+`Ctrl+Shift+N` opens a tab on its own partition: separate cookie jar, separate
+storage, never added to the reopen list, wiped on exit. The partition is hardened
+at startup, before any tab can attach to it, and the ad blocker runs on it too.
 
-Chromium contacts Google for variations/field trials, safe-browsing lists, and
-navigation error suggestions. Audit and disable what you don't want via
-`app.commandLine.appendSwitch(...)` in `main.js`, where you already set switches.
-Note the trade-off honestly: turning off Safe Browsing removes real phishing
-protection. Consider keeping it but documenting it.
+Named containers ("work", "personal") are the remaining half and are now cheap —
+the plumbing for a second partition already exists in `main.js`, and
+`will-attach-webview` is where the allowlist of acceptable partition names lives.
 
-### 1.7 Fingerprinting resistance — *skip for now*
+### 1.6 Disable Chromium's phone-home behaviour — ✅ *done*
 
-Worth understanding rather than building. Naive defenses (a spoofed user agent,
-randomised canvas) often make you **more** identifiable, because the inconsistency
-itself is a signal. Tor Browser solves this by making all users identical, which is
-years of work. Don't half-do it.
+`applyCommandLineSwitches()` in `privacy.js` turns off variations fetching,
+domain-reliability beacons, component updates, crash uploads, `<a ping>` hyperlink
+auditing, the LAN cast-device scan, Translate, and Optimization Hints. The
+Privacy Sandbox APIs — Topics, FLEDGE, Attribution Reporting, Shared Storage —
+are disabled in the same call.
+
+**The trap here:** `appendSwitch('disable-features', …)` **replaces** the list
+rather than merging it. Calling it twice means the first call silently does
+nothing. That's why the Windows occlusion workaround had to move into the same
+array, and why `privacy.js` is now the only file allowed to set that switch.
+
+Safe Browsing never applied: it's a Chrome feature, not something Electron ships,
+so there was no phishing protection to trade away.
+
+### 1.7 Fingerprinting resistance — *still skipped, and here's the sharper reason*
+
+Unchanged as a decision, but the work above clarified *why* — and the same logic
+now shows up in two places in the shipped code, which is worth knowing before
+someone "improves" either one:
+
+- **Client Hints.** The high-entropy hints (CPU architecture, device model, OS
+  build) are stripped. The low-entropy three (`sec-ch-ua`, `-mobile`,
+  `-platform`) are deliberately **kept**, because everyone sends them — removing
+  them is itself a rare signal.
+- **User agent.** The `MiniBrowser/0.1.0 Electron/32` tokens are *removed*, which
+  looks like spoofing and is the opposite. Spoofing invents a UA that contradicts
+  how the engine behaves, and the contradiction narrows you down. Removing those
+  tokens makes us present as the plain Chromium we actually are, which is the
+  largest crowd on the web.
+
+The rule: only change what moves you **toward** the majority. Tor Browser makes
+every user identical, which is years of work. Don't half-do it.
 
 ---
 

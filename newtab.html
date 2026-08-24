@@ -2,7 +2,12 @@
 <html lang="en">
 <head>
 <meta charset="utf-8" />
-<meta http-equiv="Content-Security-Policy" content="default-src 'self' 'unsafe-inline' data: https:; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline';" />
+<!-- Locked down: no inline script, no network of any kind, and the only
+     thing this page may submit to is an https search engine. The script that
+     used to sit at the bottom of this file now lives in newtab.js, which is
+     what lets script-src drop 'unsafe-inline'. -->
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' file:; style-src 'self' file: 'unsafe-inline'; img-src 'self' file: data:; form-action https: http:; base-uri 'none'; object-src 'none'; frame-ancestors 'none';" />
+<meta name="referrer" content="no-referrer" />
 <title>New tab</title>
 <style>
   /* Light monochrome, matching index.html. No hue anywhere.
@@ -164,74 +169,6 @@
 
   <footer><kbd>Ctrl</kbd> + <kbd>L</kbd> to jump to the address bar</footer>
 
-<script>
-  // ---- search engine ----
-  // This page has no preload bridge, so renderer.js passes the chosen engine
-  // in the query string (`newtab.html?engine=…`). Engines disagree on the
-  // field name — Marginalia wants `query`, the others want `q` — so the form
-  // has to be rewritten, not just re-pointed.
-  // Keep this table in sync with SEARCH_ENGINES in renderer.js.
-  const params = new URLSearchParams(location.search);
-
-  // SearXNG has no fixed home — the instance is chosen in the toolbar and
-  // arrives here as a parameter.
-  const instance = params.get('instance') || 'https://searx.be';
-
-  const ENGINES = {
-    searxng:    { name: 'SearXNG',    action: instance + '/search',                   param: 'q' },
-    marginalia: { name: 'Marginalia', action: 'https://marginalia-search.com/search', param: 'query' },
-    duckduckgo: { name: 'DuckDuckGo', action: 'https://duckduckgo.com/',              param: 'q' },
-  };
-
-  const engine = ENGINES[params.get('engine')] || ENGINES.searxng;
-  const form = document.querySelector('form');
-  const searchInput = form.querySelector('input');
-
-  form.action = engine.action;
-  searchInput.name = engine.param;
-  searchInput.placeholder = 'Search ' + engine.name;
-
-  // ---- clock + greeting ----
-  function tick() {
-    const now = new Date();
-    document.getElementById('clock').textContent =
-      now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-    document.getElementById('date').textContent =
-      now.toLocaleDateString([], { weekday: 'long', month: 'long', day: 'numeric' });
-
-    const h = now.getHours();
-    const part = h < 5 ? 'night' : h < 12 ? 'morning' : h < 18 ? 'afternoon' : 'evening';
-    document.getElementById('greeting').textContent = 'Good ' + part + ', Smruti';
-  }
-  tick();
-  setInterval(tick, 10000);
-
-  // ---- quick links ----
-  // Edit this array to change your tiles.
-  const LINKS = [
-    { name: 'YouTube',   url: 'https://youtube.com' },
-    { name: 'GitHub',    url: 'https://github.com' },
-    { name: 'Gmail',     url: 'https://mail.google.com' },
-    { name: 'Wikipedia', url: 'https://wikipedia.org' },
-    { name: 'Reddit',    url: 'https://reddit.com' },
-    { name: 'Maps',      url: 'https://maps.google.com' },
-  ];
-
-  const wrap = document.getElementById('links');
-  for (const link of LINKS) {
-    const a = document.createElement('a');
-    a.href = link.url;
-
-    const tile = document.createElement('span');
-    tile.className = 'tile';
-    tile.textContent = link.name[0].toUpperCase();
-
-    const label = document.createElement('span');
-    label.textContent = link.name;
-
-    a.append(tile, label);
-    wrap.appendChild(a);
-  }
-</script>
+<script src="newtab.js"></script>
 </body>
 </html>

@@ -13,6 +13,36 @@ const NEWTAB = new URL('newtab.html', location.href).href;
 const API = window.browserAPI || {};
 
 // ---------------------------------------------------------------------------
+// Settings
+// ---------------------------------------------------------------------------
+// A local mirror of what main.js holds. Main is the authority — it validates
+// every write and it is what Chromium actually reads — but the UI needs a
+// synchronous copy to render the privacy panel and to decide whether to
+// upgrade a typed URL.
+
+let settings = {
+  searchEngine: 'searxng',
+  searxngInstance: 'https://searx.be',
+  httpsOnly: true,
+  blockThirdPartyCookies: true,
+  trimReferrer: true,
+  sendGpc: true,
+  stripClientHints: true,
+  spellcheck: false,
+  clearOnExit: false,
+  askWhereToSaveDownloads: true,
+  blockDangerousDownloads: true,
+  dnsMode: 'secure',
+  sitePermissions: {},
+};
+
+function setSetting(key, value) {
+  settings = { ...settings, [key]: value };
+  if (API.setSetting) API.setSetting(key, value);
+  renderPrivacyPanel();
+}
+
+// ---------------------------------------------------------------------------
 // Search engines
 // ---------------------------------------------------------------------------
 // Two of the three are open source, which is a stronger guarantee than a
@@ -122,6 +152,12 @@ const reloadBtn  = document.getElementById('reload');
 const homeBtn    = document.getElementById('home');
 const newTabBtn  = document.getElementById('newtab');
 
+const panelEl        = document.getElementById('privacypanel');
+const insecureBar    = document.getElementById('insecurebar');
+const insecureDetail = document.getElementById('insecuredetail');
+const insecureBack   = document.getElementById('insecureback');
+const insecureGo     = document.getElementById('insecurego');
+
 /** @type {Array<{id:number, view:Element, wrap:Element, el:Element, titleEl:Element, iconEl:Element, url:string, title:string}>} */
 let tabs = [];
 let activeId = null;
@@ -187,6 +223,80 @@ function stripTracking(url) {
 }
 
 // ---------------------------------------------------------------------------
+// HTTPS-only
+// ---------------------------------------------------------------------------
+// This lives in BOTH processes, and the reason is a genuine Electron gotcha:
+// `will-navigate` — where main.js guards navigation — does not fire for
+// navigations started programmatically. Every navigation WE start, from the
+// omnibox or by setting a webview's src, is programmatic. So main covers what
+// pages do, and this covers what the user does. Miss either half and the
+// upgrade silently applies to only some navigations.
+//
+// Hosts the user chose to load over plain http after an upgrade failed.
+// Session-scoped in both processes, populated by the same click, so the two
+// copies cannot drift.
+const httpsExceptions = new Set();
+
+// Names that never leave this machine. Forcing HTTPS on them would break
+// local development for no gain — there is no network in between to listen.
+function isLocalHost(hostname) {
+  const h = (hostname || '').toLowerCase();
+  if (!h) return false;
+  if (h === 'localhost' || h.endsWith('.localhost') || h.endsWith('.local')) return true;
+  if (h === '::1' || h.startsWith('127.')) return true;
+  if (h.endsWith('.onion')) return true;
+  if (/^10\./.test(h) || /^192\.168\./.test(h)) return true;
+  if (/^172\.(1[6-9]|2\d|3[01])\./.test(h)) return true;
+  return false;
+}
+
+// https URL -> the http URL it replaced. Remembered so that if the upgraded
+// load fails, we can tell "this site has no HTTPS" apart from "you're
+// offline", and offer the original rather than a dead end. Bounded, because
+// this would otherwise grow for the life of the session.
+const upgradedFrom = new Map();
+
+function upgradeToHttps(url) {
+  if (!settings.httpsOnly) return url;
+  try {
+    const u = new URL(url);
+    if (u.protocol !== 'http:') return url;
+    if (isLocalHost(u.hostname) || httpsExceptions.has(u.hostname)) return url;
+    u.protocol = 'https:';
+
+    upgradedFrom.set(u.href, url);
+    if (upgradedFrom.size > 50) upgradedFrom.delete(upgradedFrom.keys().next().value);
+    return u.href;
+  } catch {
+    return url;
+  }
+}
+
+const originalHttpFor = (url) => upgradedFrom.get(url) || null;
+
+// Schemes a tab may be pointed at. Mirrors ALLOWED_SCHEMES in main.js — main
+// is the enforcement, this is so the omnibox refuses rather than silently
+// doing nothing when you paste `javascript:` or a `data:` URL.
+const OMNIBOX_SCHEMES = new Set(['https:', 'http:', 'about:', 'blob:', 'file:']);
+
+function schemeAllowed(url) {
+  if (url.startsWith(NEWTAB)) return true;
+  try {
+    return OMNIBOX_SCHEMES.has(new URL(url).protocol);
+  } catch {
+    return false;
+  }
+}
+
+// Connection-level failures that mean "there is no HTTPS here", as opposed to
+// "you are offline". Kept in step with NO_HTTPS_ERRORS in main.js.
+const NO_HTTPS_ERRORS = new Set([-100, -101, -102, -107, -118, -200, -201, -202]);
+
+function hostOf(url) {
+  try { return new URL(url).hostname || null; } catch { return null; }
+}
+
+// ---------------------------------------------------------------------------
 // Omnibox: decide whether input is a URL or a search query
 // ---------------------------------------------------------------------------
 
@@ -196,13 +306,21 @@ function normalizeUrl(raw) {
 
   // localhost / bare IP, with optional port. Checked BEFORE the scheme rule,
   // because "localhost:3000" otherwise reads as the scheme "localhost:".
+  // upgradeToHttps leaves loopback and private ranges alone but will still
+  // upgrade a bare PUBLIC address, which is what you want.
   if (/^(localhost|\d{1,3}(\.\d{1,3}){3})(:\d+)?([/?#]|$)/i.test(s)) {
-    return 'http://' + s;
+    return upgradeToHttps('http://' + s);
   }
 
   // Already has a scheme: about:blank, file:///, https://...
   // The (?!\d) stops "foo:1234" from being mistaken for one.
-  if (/^[a-z][a-z0-9+.-]*:(?!\d)/i.test(s)) return stripTracking(s);
+  if (/^[a-z][a-z0-9+.-]*:(?!\d)/i.test(s)) {
+    const url = upgradeToHttps(stripTracking(s));
+    // `javascript:` and `data:` in an address bar are how phishing gets a
+    // victim to run something on a page they trust. Refuse rather than
+    // navigate; main.js blocks them too, but silently.
+    return schemeAllowed(url) ? url : null;
+  }
 
   // Looks like a bare domain: example.com, www.foo.co.uk/bar
   // (a space anywhere before the first slash means it's a search)
@@ -225,6 +343,12 @@ function prettyUrl(url) {
 
 let blockCounts = new Map();
 
+// Permissions a page asked for and was denied, per host, so the privacy panel
+// can offer to grant what a site actually wanted rather than listing all
+// twenty. Declared up here, beside the other toolbar state, because
+// syncShield() reads it and syncShield runs before the panel code below.
+const blockedPermissions = new Map();   // host -> Set<permission>
+
 function webContentsIdOf(tab) {
   try { return tab.view.getWebContentsId(); } catch { return null; }
 }
@@ -235,6 +359,13 @@ function syncShield() {
   const n = wcId === null ? 0 : (blockCounts.get(wcId) || 0);
   blockEl.textContent = String(n);
   shieldEl.classList.toggle('on', n > 0);
+
+  // A dot, not a dialog. Something was denied and there's a decision waiting
+  // in the panel, but the page is never interrupted to say so.
+  shieldEl.classList.toggle('attention', hasPendingDecision());
+  shieldEl.title = hasPendingDecision()
+    ? 'This site asked for a permission and was denied'
+    : 'Privacy for this site';
 }
 
 // ---------------------------------------------------------------------------
@@ -249,16 +380,27 @@ function activeTab() {
   return getTab(activeId);
 }
 
-function createTab(url = homeUrl(), { activate = true } = {}) {
+// The partition name is a contract with main.js: it is the only value
+// 'will-attach-webview' will accept, and it is the session main hardens and
+// wipes on exit. Change it in one place and private tabs silently fall back
+// to the normal jar.
+const PRIVATE_PARTITION = 'persist:in-memory-private';
+
+function createTab(url = homeUrl(), { activate = true, isPrivate = false } = {}) {
   const id = nextId++;
-  url = stripTracking(url);
+  url = upgradeToHttps(stripTracking(url));
 
   // --- the page itself ---
   const view = document.createElement('webview');
   view.setAttribute('src', url);
   view.setAttribute('allowpopups', '');
-  // All tabs share one session partition, so logins carry across tabs —
-  // which is what people expect from a browser.
+
+  // Normal tabs share one session partition, so logins carry across tabs —
+  // which is what people expect from a browser. A private tab gets its own
+  // jar instead: separate cookies, separate storage, nothing written to disk,
+  // and wiped when the app closes. It cannot see the normal session's logins
+  // and the normal session cannot see its.
+  if (isPrivate) view.setAttribute('partition', PRIVATE_PARTITION);
 
   // The wrapper is what gets shown/hidden. Toggling display on the <webview>
   // itself breaks Electron's internal sizing — see the CSS note in index.html.
@@ -269,7 +411,17 @@ function createTab(url = homeUrl(), { activate = true } = {}) {
 
   // --- the tab button ---
   const el = document.createElement('div');
-  el.className = 'tab';
+  el.className = 'tab' + (isPrivate ? ' private' : '');
+
+  // A private tab is marked twice over — inverted fill AND a mask glyph.
+  // Getting this wrong means typing a password into the wrong kind of tab,
+  // so one signal isn't enough.
+  const mask = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  mask.setAttribute('viewBox', '0 0 24 24');
+  mask.setAttribute('class', 'mask');
+  const maskPath = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+  maskPath.setAttribute('d', 'M12 4C7 4 3 7.6 1 12c2 4.4 6 8 11 8s9-3.6 11-8c-2-4.4-6-8-11-8zm0 13a5 5 0 1 1 0-10 5 5 0 0 1 0 10zm0-8a3 3 0 1 0 0 6 3 3 0 0 0 0-6z');
+  mask.appendChild(maskPath);
 
   const spinner = document.createElement('div');
   spinner.className = 'spinner';
@@ -287,10 +439,18 @@ function createTab(url = homeUrl(), { activate = true } = {}) {
   closeEl.textContent = '×';
   closeEl.title = 'Close tab (Ctrl+W)';
 
-  el.append(spinner, iconEl, titleEl, closeEl);
+  el.append(mask, spinner, iconEl, titleEl, closeEl);
   tabsEl.appendChild(el);
 
-  const tab = { id, view, wrap, el, titleEl, iconEl, url, title: 'New tab' };
+  const tab = {
+    id, view, wrap, el, titleEl, iconEl, url,
+    title: isPrivate ? 'Private tab' : 'New tab',
+    isPrivate,
+    // The http URL this tab's current load replaced, if the HTTPS upgrade is
+    // what's being tried. Cleared the moment anything succeeds.
+    pendingUpgrade: originalHttpFor(url),
+  };
+  titleEl.textContent = tab.title;
   tabs.push(tab);
 
   // --- wiring ---
@@ -334,6 +494,12 @@ function createTab(url = homeUrl(), { activate = true } = {}) {
       blockCounts.delete(wcId);
       if (API.resetBlockCount) API.resetBlockCount(wcId);
     }
+
+    // A load that succeeded is not a failed upgrade, and permission decisions
+    // belong to the page that asked for them.
+    tab.pendingUpgrade = originalHttpFor(e.url || '');
+    tab.blockedPermissions = new Set();
+    if (tab.id === activeId) hideInsecureBar();
     onNavigate(e);
   });
 
@@ -344,6 +510,15 @@ function createTab(url = homeUrl(), { activate = true } = {}) {
   view.addEventListener('did-fail-load', (e) => {
     // -3 is ERR_ABORTED, which fires on ordinary redirects/cancels. Ignore it.
     if (e.errorCode === -3 || !e.isMainFrame) return;
+
+    // If the thing that failed was our own silent HTTPS upgrade, say so and
+    // offer the choice. Leaving the user on an error page with no explanation
+    // is how a good default gets blamed for a broken browser.
+    if (tab.pendingUpgrade && NO_HTTPS_ERRORS.has(e.errorCode)) {
+      if (tab.id === activeId) showInsecureBar(tab.pendingUpgrade);
+      return;
+    }
+
     tab.title = 'Failed to load';
     titleEl.textContent = tab.title;
   });
@@ -376,7 +551,10 @@ function closeTab(id) {
   // Remember where it was so Ctrl+Shift+T can bring it back. An empty new tab
   // page isn't worth restoring, and the list is capped so it can't grow
   // without bound over a long session.
-  if (tab.url && !tab.url.startsWith(NEWTAB)) {
+  //
+  // A private tab is never remembered. The entire point is that closing it
+  // ends the trail; a reopen list that survives it would quietly undo that.
+  if (tab.url && !tab.isPrivate && !tab.url.startsWith(NEWTAB)) {
     closedTabs.push(tab.url);
     if (closedTabs.length > 10) closedTabs.shift();
   }
@@ -430,11 +608,13 @@ function syncToolbar() {
 
 function navigate(input) {
   const url = normalizeUrl(input);
-  if (!url) return;
+  if (!url) return;              // refused: a scheme we won't navigate to
   const tab = activeTab();
   if (!tab) return;
 
   tab.url = url;
+  tab.pendingUpgrade = originalHttpFor(url);
+  hideInsecureBar();
   try { tab.view.loadURL(url); } catch { tab.view.setAttribute('src', url); }
   urlEdited = false;
   tab.view.focus();
@@ -473,6 +653,10 @@ urlInput.addEventListener('keydown', (e) => {
 
 const ACTIONS = {
   'new-tab': () => { createTab(homeUrl()); urlInput.focus(); },
+
+  'new-private-tab': () => { createTab(homeUrl(), { isPrivate: true }); urlInput.focus(); },
+
+  'clear-data': () => { if (API.clearBrowsingData) API.clearBrowsingData(); },
 
   'close-tab': () => {
     if (activeId === null) return;
@@ -526,10 +710,12 @@ function shortcutFor(e) {
 
   if (ctrl && !e.altKey) {
     if (key === 't') return [e.shiftKey ? 'reopen-tab' : 'new-tab'];
+    if (key === 'n' && e.shiftKey) return ['new-private-tab'];
     if (key === 'w') return ['close-tab'];
     if (key === 'l') return ['focus-omnibox'];
     if (key === 'r') return [e.shiftKey ? 'hard-reload' : 'reload'];
     if (key === 'tab') return ['cycle-tab', { step: e.shiftKey ? -1 : 1 }];
+    if (key === 'delete' && e.shiftKey) return ['clear-data'];
   }
 
   if (e.altKey && !ctrl) {
@@ -678,6 +864,339 @@ engineMenu.addEventListener('click', (e) => e.stopPropagation());
 window.addEventListener('click', closeEngineMenu);
 window.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeEngineMenu(); });
 
+// ---------------------------------------------------------------------------
+// Insecure-connection bar
+// ---------------------------------------------------------------------------
+// Shown only when the silent HTTPS upgrade failed because the site genuinely
+// has none. A bar over the top of the page area rather than a full-page
+// interstitial: interstitials that block everything train people to click
+// through them without reading, which is the opposite of what a warning is
+// for.
+
+let insecureUrl = null;
+
+function showInsecureBar(url) {
+  insecureUrl = url;
+  const host = hostOf(url) || 'This site';
+  insecureDetail.textContent =
+    host + ' offers no encrypted connection. Anyone on the network between you '
+    + 'and it can read and change what you send.';
+  insecureBar.classList.add('show');
+}
+
+function hideInsecureBar() {
+  insecureUrl = null;
+  insecureBar.classList.remove('show');
+}
+
+insecureBack.addEventListener('click', () => {
+  hideInsecureBar();
+  const tab = activeTab();
+  try {
+    if (tab.view.canGoBack()) tab.view.goBack();
+    else navigate(homeUrl());
+  } catch { navigate(homeUrl()); }
+});
+
+insecureGo.addEventListener('click', () => {
+  if (!insecureUrl) return;
+  const url = insecureUrl;
+  const host = hostOf(url);
+
+  // Both processes need the exception: this one so the omnibox stops
+  // upgrading, main so page-initiated navigations stop too. One click, two
+  // updates, so they cannot disagree.
+  if (host) {
+    httpsExceptions.add(host);
+    if (API.allowInsecure) API.allowInsecure(host);
+  }
+  hideInsecureBar();
+
+  const tab = activeTab();
+  if (!tab) return;
+  tab.pendingUpgrade = null;
+  tab.url = url;
+  try { tab.view.loadURL(url); } catch { tab.view.setAttribute('src', url); }
+});
+
+// ---------------------------------------------------------------------------
+// Privacy panel
+// ---------------------------------------------------------------------------
+// Every strict default the browser ships with is switchable here. That is what
+// separates a defensible default from a merely opinionated one: the user can
+// always see what is being done on their behalf, and always undo it.
+
+// Keep in step with PERMISSION_LABELS in privacy.js. Blocked permissions
+// arrive over IPC carrying their own label; this table is for the ones already
+// granted, which are read back from settings and have no message attached.
+const PERMISSION_LABELS = {
+  geolocation: 'Location',
+  notifications: 'Notifications',
+  media: 'Camera and microphone',
+  'display-capture': 'Screen sharing',
+  midi: 'MIDI devices',
+  midiSysex: 'MIDI (full device access)',
+  'idle-detection': 'Idle detection',
+  'clipboard-read': 'Clipboard reading',
+  'window-management': 'Window and screen layout',
+  'speaker-selection': 'Audio output devices',
+  'storage-access': 'Third-party storage',
+  'top-level-storage-access': 'Third-party storage',
+  mediaKeySystem: 'DRM playback',
+  hid: 'HID devices',
+  serial: 'Serial ports',
+  usb: 'USB devices',
+  bluetooth: 'Bluetooth',
+  fileSystem: 'Local file access',
+  openExternal: 'Opening other apps',
+  keyboardLock: 'Keyboard capture',
+};
+
+const PROTECTIONS = [
+  {
+    key: 'httpsOnly',
+    name: 'HTTPS-only',
+    note: 'Upgrade every site to an encrypted connection, and ask before ever falling back.',
+  },
+  {
+    key: 'blockThirdPartyCookies',
+    name: 'Block third-party cookies',
+    note: 'The mechanism behind cross-site tracking: one embedded network reading the same cookie everywhere.',
+  },
+  {
+    key: 'trimReferrer',
+    name: 'Trim cross-site referrers',
+    note: 'Other sites learn you came from here, not which page you were reading.',
+  },
+  {
+    key: 'sendGpc',
+    name: 'Send Global Privacy Control',
+    note: 'A legally binding opt-out of data sale under California and Colorado law.',
+  },
+  {
+    key: 'stripClientHints',
+    name: 'Strip high-entropy Client Hints',
+    note: 'Hides your exact CPU, device model and OS build. The low-entropy ones stay — removing those makes you more distinctive, not less.',
+  },
+  {
+    key: 'blockDangerousDownloads',
+    name: 'Warn on executable downloads',
+    note: 'Ask before a site writes a program to your disk.',
+  },
+  {
+    key: 'askWhereToSaveDownloads',
+    name: 'Ask where to save downloads',
+    note: 'Nothing lands on disk without you choosing where.',
+  },
+  {
+    key: 'spellcheck',
+    name: 'Spellcheck',
+    note: 'Off by default: Chromium fetches its dictionaries from a Google server and re-checks periodically.',
+  },
+  {
+    key: 'clearOnExit',
+    name: 'Clear everything on exit',
+    note: 'Wipe cookies, cache and site storage when the browser closes.',
+  },
+];
+
+const DNS_MODES = [
+  { id: 'secure', label: 'Encrypted only' },
+  { id: 'automatic', label: 'Encrypted if possible' },
+  { id: 'off', label: 'System DNS' },
+];
+
+function activeHost() {
+  const tab = activeTab();
+  if (!tab || !tab.url || tab.url.startsWith(NEWTAB)) return null;
+  return hostOf(tab.url);
+}
+
+function hasPendingDecision() {
+  const host = activeHost();
+  if (!host) return false;
+  const blocked = blockedPermissions.get(host);
+  return Boolean(blocked && blocked.size);
+}
+
+function row({ name, note, on, onClick, className = '' }) {
+  const el = document.createElement('button');
+  el.className = 'pp-row' + (on ? ' on' : '') + (className ? ' ' + className : '');
+
+  const label = document.createElement('span');
+  label.className = 'label';
+  const title = document.createElement('span');
+  title.textContent = name;
+  label.appendChild(title);
+  if (note) {
+    const small = document.createElement('small');
+    small.textContent = note;
+    label.appendChild(small);
+  }
+
+  const sw = document.createElement('span');
+  sw.className = 'sw';
+
+  el.append(label, sw);
+  el.addEventListener('click', onClick);
+  return el;
+}
+
+function section(heading) {
+  const el = document.createElement('div');
+  el.className = 'pp-section';
+  const h = document.createElement('h4');
+  h.textContent = heading;
+  el.appendChild(h);
+  return el;
+}
+
+function renderPrivacyPanel() {
+  if (!panelEl.classList.contains('open')) return;
+  panelEl.textContent = '';
+
+  const tab = activeTab();
+  const host = activeHost();
+  const wcId = tab ? webContentsIdOf(tab) : null;
+  const blocked = wcId === null ? 0 : (blockCounts.get(wcId) || 0);
+
+  // --- header ---
+  const head = document.createElement('div');
+  head.className = 'pp-head';
+  const hostEl = document.createElement('div');
+  hostEl.className = 'pp-host';
+  hostEl.textContent = host || 'New tab';
+  const sub = document.createElement('div');
+  sub.className = 'pp-sub';
+  sub.textContent = tab && tab.isPrivate
+    ? 'Private tab — separate cookies, nothing saved to disk'
+    : blocked + (blocked === 1 ? ' request blocked on this page' : ' requests blocked on this page');
+  head.append(hostEl, sub);
+  panelEl.appendChild(head);
+
+  // --- this site ---
+  if (host) {
+    const siteSection = section('This site');
+    const granted = (settings.sitePermissions || {})[host] || {};
+    const asked = blockedPermissions.get(host) || new Set();
+    const names = new Set([...Object.keys(granted), ...asked]);
+
+    if (names.size === 0) {
+      const empty = document.createElement('div');
+      empty.className = 'pp-empty';
+      empty.textContent = 'This site has not asked for any device permissions.';
+      siteSection.appendChild(empty);
+    } else {
+      for (const permission of names) {
+        const on = granted[permission] === true;
+        siteSection.appendChild(row({
+          name: PERMISSION_LABELS[permission] || permission,
+          note: on ? 'Allowed on this site' : 'Blocked — this site asked for it',
+          on,
+          onClick: () => {
+            const next = { ...(settings.sitePermissions || {}) };
+            const site = { ...(next[host] || {}) };
+            if (on) delete site[permission];
+            else site[permission] = true;
+            if (Object.keys(site).length) next[host] = site;
+            else delete next[host];
+
+            settings = { ...settings, sitePermissions: next };
+            if (API.setPermission) API.setPermission(host, permission, !on);
+            renderPrivacyPanel();
+          },
+        }));
+      }
+    }
+
+    if (httpsExceptions.has(host)) {
+      siteSection.appendChild(row({
+        name: 'Allowed over plain HTTP',
+        note: 'This exception lasts until you close the browser.',
+        on: true,
+        onClick: () => {
+          httpsExceptions.delete(host);
+          renderPrivacyPanel();
+        },
+      }));
+    }
+
+    panelEl.appendChild(siteSection);
+  }
+
+  // --- global protections ---
+  const protections = section('Protections');
+  for (const p of PROTECTIONS) {
+    protections.appendChild(row({
+      name: p.name,
+      note: p.note,
+      on: settings[p.key] === true,
+      onClick: () => setSetting(p.key, !settings[p.key]),
+    }));
+  }
+  panelEl.appendChild(protections);
+
+  // --- DNS ---
+  const dns = section('Encrypted DNS');
+  const dnsNote = document.createElement('div');
+  dnsNote.className = 'pp-empty';
+  dnsNote.textContent =
+    'Plain DNS leaks every hostname you visit to the network even when the '
+    + 'page itself is encrypted. "Encrypted only" never falls back — which is '
+    + 'the point, but it also means hotel wifi sign-in pages will not load.';
+  dns.appendChild(dnsNote);
+
+  const chips = document.createElement('div');
+  chips.className = 'pp-select';
+  for (const mode of DNS_MODES) {
+    const chip = document.createElement('button');
+    chip.className = 'chip' + (settings.dnsMode === mode.id ? ' active' : '');
+    chip.textContent = mode.label;
+    chip.addEventListener('click', () => setSetting('dnsMode', mode.id));
+    chips.appendChild(chip);
+  }
+  dns.appendChild(chips);
+  panelEl.appendChild(dns);
+
+  // --- actions ---
+  const actions = section('Data');
+  actions.appendChild(row({
+    name: 'New private tab',
+    note: 'Separate cookie jar, nothing written to disk. Ctrl+Shift+N',
+    on: false,
+    onClick: () => { closePrivacyPanel(); runAction('new-private-tab'); },
+  }));
+  actions.appendChild(row({
+    name: 'Clear browsing data…',
+    note: 'Cookies, cache and site storage, everywhere. Ctrl+Shift+Delete',
+    on: false,
+    onClick: () => { closePrivacyPanel(); runAction('clear-data'); },
+  }));
+  panelEl.appendChild(actions);
+}
+
+function closePrivacyPanel() {
+  panelEl.classList.remove('open');
+}
+
+shieldEl.addEventListener('click', (e) => {
+  e.stopPropagation();
+  closeEngineMenu();
+  const opening = !panelEl.classList.contains('open');
+  panelEl.classList.toggle('open', opening);
+  if (opening) {
+    // Opening the panel is the acknowledgement — the dot has done its job.
+    const host = activeHost();
+    if (host) blockedPermissions.delete(host);
+    renderPrivacyPanel();
+    syncShield();
+  }
+});
+
+panelEl.addEventListener('click', (e) => e.stopPropagation());
+window.addEventListener('click', closePrivacyPanel);
+window.addEventListener('keydown', (e) => { if (e.key === 'Escape') closePrivacyPanel(); });
+
 // --- Bridges from the main process ---
 if (API.hasTitleBarOverlay) {
   document.body.classList.add('has-overlay');
@@ -698,6 +1217,38 @@ if (API.onShortcut) {
   API.onShortcut((hit) => runAction(hit.action, hit));
 }
 
+if (API.onPermissionBlocked) {
+  // The page has ALREADY been denied by the time this arrives — main.js does
+  // not wait for us. This is only so the toolbar can offer to change it.
+  API.onPermissionBlocked(({ host, permission }) => {
+    if (!host || !permission) return;
+    if (!blockedPermissions.has(host)) blockedPermissions.set(host, new Set());
+    blockedPermissions.get(host).add(permission);
+    syncShield();
+    renderPrivacyPanel();
+  });
+}
+
+if (API.onHttpsUpgradeFailed) {
+  // The page-initiated half of the HTTPS upgrade. The omnibox half is handled
+  // by the tab's own did-fail-load, above.
+  API.onHttpsUpgradeFailed(({ tabId, url }) => {
+    const tab = tabs.find((t) => webContentsIdOf(t) === tabId);
+    if (!tab) return;
+    tab.pendingUpgrade = url;
+    if (tab.id === activeId) showInsecureBar(url);
+  });
+}
+
+if (API.onSettingsChanged) {
+  // Main is the authority: it validates every write and may reject one. Take
+  // what it actually stored rather than assuming our optimistic copy won.
+  API.onSettingsChanged((saved) => {
+    if (saved) settings = { ...settings, ...saved };
+    renderPrivacyPanel();
+  });
+}
+
 // canGoBack()/canGoForward() have no change event, so poll them. Cheap.
 setInterval(syncToolbar, 400);
 
@@ -708,6 +1259,7 @@ setInterval(syncToolbar, 400);
   if (API.getSettings) {
     try {
       const saved = await API.getSettings();
+      if (saved) settings = { ...settings, ...saved };
       if (saved && saved.searchEngine) engineId = engineOf(saved.searchEngine).id;
       if (saved && saved.searxngInstance) {
         searxngInstance = normalizeInstance(saved.searxngInstance) || searxngInstance;

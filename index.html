@@ -2,7 +2,28 @@
 <html lang="en">
 <head>
 <meta charset="utf-8" />
-<meta http-equiv="Content-Security-Policy" content="default-src 'self' 'unsafe-inline' data: https:; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline';" />
+<!-- This document holds the preload bridge, so it is the highest-value target
+     in the app: script running here can talk to the main process. The policy
+     below is therefore as tight as the UI allows.
+
+     script-src has no 'unsafe-inline' — renderer.js is a real file and there
+     are no inline <script> tags, so injected markup cannot execute.
+     style-src keeps it only because the stylesheet below is inline; that is a
+     far smaller risk, and moving it out is a tidy-up for another day.
+     img-src allows https so remote favicons render in the tab strip.
+     connect-src is 'none': this UI has no business opening a socket.
+
+     `file:` is listed alongside 'self' deliberately: this document is loaded
+     with loadFile(), so its origin is a file: origin, and 'self' alone does
+     not reliably match one. Omit it and the whole UI silently fails to load
+     its own script.
+
+     frame-src is open because a <webview> is created as a frame and would
+     otherwise be refused — which would block every web page in the browser.
+     It costs nothing here: with script-src locked down there is no way to
+     inject a frame in the first place. -->
+<meta http-equiv="Content-Security-Policy" content="default-src 'self' file:; script-src 'self' file:; style-src 'self' file: 'unsafe-inline'; img-src 'self' file: data: https:; connect-src 'none'; form-action 'none'; base-uri 'none'; object-src 'none'; frame-src *; child-src *; frame-ancestors 'none';" />
+<meta name="referrer" content="no-referrer" />
 <title>MiniBrowser</title>
 <style>
   /* ---------- Palette ----------
@@ -323,23 +344,192 @@
   .chip:hover { background: rgba(0,0,0,.12); color: var(--text); }
   .chip.active { background: var(--text); color: var(--tab-active); }
 
-  /* Blocked-request counter. Hidden until something is actually blocked, so
-     it reads as a result rather than as chrome. */
+  /* The shield is both the blocked-request counter and the way into the
+     privacy panel. It is always present — a protection you can't find is a
+     protection you don't trust — but the NUMBER only appears once something
+     has actually been blocked, so it still reads as a result rather than as
+     decoration. */
   #shield {
-    display: none;
+    display: flex;
     align-items: center;
     gap: 5px;
     height: 24px;
     padding: 0 9px 0 7px;
     margin-right: 2px;
+    border: 0;
     border-radius: 12px;
     background: rgba(0,0,0,.06);
+    color: var(--text-dim);
+    font: inherit;
+    cursor: default;
+    position: relative;
+  }
+  #shield:hover { background: rgba(0,0,0,.11); color: var(--text); }
+  #shield.on { color: var(--text); }
+  #shield svg { width: 13px; height: 13px; fill: currentColor; flex: 0 0 13px; }
+  #shield span { font-size: 11px; font-variant-numeric: tabular-nums; display: none; }
+  #shield.on span { display: inline; }
+
+  /* Something was denied on this page and there's a decision waiting. A dot,
+     not a modal — the page is never interrupted. */
+  #shield.attention::after {
+    content: '';
+    position: absolute;
+    top: 3px; right: 4px;
+    width: 6px; height: 6px;
+    border-radius: 50%;
+    background: var(--text);
+    box-shadow: 0 0 0 2px var(--toolbar-bg);
+  }
+
+  /* ---------- Privacy panel ---------- */
+  /* Same anchoring as the engine menu: below the 40px strip + 44px toolbar. */
+  #privacypanel {
+    position: absolute;
+    top: 84px;
+    right: 8px;
+    z-index: 11;
+    width: 310px;
+    max-height: calc(100% - 100px);
+    overflow-y: auto;
+    padding: 4px;
+    border-radius: 10px;
+    background: var(--tab-active);
+    box-shadow: 0 0 0 1px var(--border), 0 10px 28px rgba(0,0,0,.16);
+    display: none;
+  }
+  #privacypanel.open { display: block; }
+
+  .pp-head {
+    padding: 10px 11px 8px;
+    border-bottom: 1px solid var(--border);
+  }
+  .pp-host {
+    font-size: 13px;
+    font-weight: 600;
+    word-break: break-all;
+  }
+  .pp-sub { font-size: 11px; color: var(--text-dim); margin-top: 2px; }
+
+  .pp-section { padding: 8px 4px 4px; }
+  .pp-section > h4 {
+    margin: 0 0 2px;
+    padding: 0 7px;
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: .06em;
+    text-transform: uppercase;
+    color: var(--text-faint);
+  }
+  .pp-section + .pp-section { border-top: 1px solid var(--border); }
+
+  /* One row per protection. The whole row is the target — a 12px checkbox is
+     a bad click target and a worse toggle. */
+  .pp-row {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    width: 100%;
+    padding: 7px;
+    border: 0;
+    border-radius: 7px;
+    background: transparent;
     color: var(--text);
+    font: inherit;
+    font-size: 12px;
+    text-align: left;
     cursor: default;
   }
-  #shield.on { display: flex; }
-  #shield svg { width: 13px; height: 13px; fill: currentColor; flex: 0 0 13px; }
-  #shield span { font-size: 11px; font-variant-numeric: tabular-nums; }
+  .pp-row:hover { background: var(--tab-hover); }
+  .pp-row .label { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+  .pp-row .label small { color: var(--text-dim); font-size: 10.5px; line-height: 1.35; }
+
+  /* Monochrome switch: filled = on. Shape and fill, no colour. */
+  .pp-row .sw {
+    flex: 0 0 26px;
+    width: 26px; height: 15px;
+    border-radius: 8px;
+    background: var(--border);
+    position: relative;
+    transition: background .12s;
+  }
+  .pp-row .sw::after {
+    content: '';
+    position: absolute;
+    top: 2px; left: 2px;
+    width: 11px; height: 11px;
+    border-radius: 50%;
+    background: var(--tab-active);
+    transition: transform .12s;
+  }
+  .pp-row.on .sw { background: var(--text); }
+  .pp-row.on .sw::after { transform: translateX(11px); }
+
+  .pp-row.danger { color: var(--text); }
+  .pp-row.danger:hover { background: var(--tab-hover); }
+
+  .pp-empty {
+    padding: 4px 7px 8px;
+    font-size: 11px;
+    color: var(--text-dim);
+  }
+
+  .pp-select {
+    display: flex;
+    gap: 4px;
+    padding: 2px 7px 8px;
+  }
+  .pp-select .chip { font-size: 10px; }
+
+  /* ---------- Insecure-connection bar ---------- */
+  /* Sits over the page area rather than replacing it: an interstitial that
+     blocks the whole page teaches people to click through interstitials. */
+  #insecurebar {
+    position: absolute;
+    left: 0; right: 0; top: 0;
+    z-index: 5;
+    display: none;
+    align-items: center;
+    gap: 10px;
+    padding: 9px 12px;
+    background: var(--chrome-bg);
+    border-bottom: 1px solid var(--border);
+    font-size: 12px;
+  }
+  #insecurebar.show { display: flex; }
+  #insecurebar svg { width: 15px; height: 15px; fill: var(--text); flex: 0 0 15px; }
+  #insecurebar .msg { flex: 1 1 auto; min-width: 0; }
+  #insecurebar .msg b { font-weight: 600; }
+  #insecurebar .msg small { display: block; color: var(--text-dim); font-size: 10.5px; }
+  #insecurebar button {
+    flex: 0 0 auto;
+    padding: 4px 10px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--tab-active);
+    color: var(--text);
+    font: inherit;
+    font-size: 11px;
+    cursor: default;
+  }
+  #insecurebar button:hover { background: var(--tab-hover); }
+  #insecurebar button.primary { background: var(--text); color: var(--tab-active); border-color: var(--text); }
+
+  /* ---------- Private tabs ---------- */
+  /* A private tab must be obvious at a glance, or you will type something
+     into the wrong one. Inverted fill, which no other tab state uses. */
+  .tab.private { background: rgba(0,0,0,.10); }
+  .tab.private.active { background: var(--text); }
+  .tab.private.active .tab-title,
+  .tab.private.active .tab-close { color: var(--tab-active); }
+  .tab.private .favicon.blank { background: var(--text-dim); }
+  .tab.private .mask {
+    flex: 0 0 13px;
+    width: 13px; height: 13px;
+    fill: currentColor;
+    opacity: .8;
+  }
+  .tab:not(.private) .mask { display: none; }
 
   /* ---------- Page area ---------- */
   /* The page floats inside the window instead of filling it edge to edge —
@@ -410,16 +600,34 @@
         <span id="enginename">—</span>
       </button>
 
-      <div id="shield" title="Ads and trackers blocked on this page">
+      <button id="shield" title="Privacy for this site">
         <svg viewBox="0 0 24 24"><path d="M12 1 3 5v6c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V5l-9-4z"/></svg>
         <span id="blockcount">0</span>
-      </div>
+      </button>
     </div>
 
     <!-- Populated by renderer.js from SEARCH_ENGINES. -->
     <div id="enginemenu"></div>
 
-    <div id="views"></div>
+    <!-- Populated by renderer.js. Every strict default the browser ships with
+         is switchable from here — that is what makes them defensible rather
+         than merely opinionated. -->
+    <div id="privacypanel"></div>
+
+    <div id="views">
+      <!-- Shown only when an HTTPS upgrade failed because the site has no
+           HTTPS at all. Built here rather than in JS so it can't be missing
+           at the moment it's needed. -->
+      <div id="insecurebar">
+        <svg viewBox="0 0 24 24"><path d="M1 21h22L12 2 1 21zm12-3h-2v-2h2v2zm0-4h-2v-4h2v4z"/></svg>
+        <div class="msg">
+          <b>This site has no HTTPS</b>
+          <small id="insecuredetail">Anyone on the network can read and change what you send.</small>
+        </div>
+        <button id="insecureback" class="primary">Go back</button>
+        <button id="insecurego">Continue anyway</button>
+      </div>
+    </div>
   </div>
 
   <script src="renderer.js"></script>

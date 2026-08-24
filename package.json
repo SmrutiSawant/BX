@@ -12,6 +12,7 @@
     "electron": "^32.0.0"
   },
   "dependencies": {
-    "@ghostery/adblocker-electron": "^2.18.2"
+    "@ghostery/adblocker-electron": "^2.18.2",
+    "tldts-experimental": "^6.1.0"
   }
 }
