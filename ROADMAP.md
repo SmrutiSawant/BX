@@ -319,28 +319,3 @@ Google. That's a real browser identity for about one day of work.
 12. Containers (1.5), workspaces (2.6), reader mode (2.7)
 
 ---
-
-## Housekeeping before you start
-
-Your README says to delete the diagnostics once the UI is confirmed working, and
-`browser-log.txt` and `window-debug.txt` both exist, so it has been. Remove:
-
-- the logging block, `attachLogging()` and `writeDiagnostics()` in `main.js`
-- the probe block at the bottom of `renderer.js` (error handler, `pointerdown`
-  logger, `HANDLER FIRED` listeners)
-- both `.txt` files
-
-The `pointerdown` logger in particular fires on every click in capture phase. Clean
-this out first so you're building on a tidy base.
-
-## One structural decision to make early
-
-Your README notes the `<webview>` vs `WebContentsView` trade-off. It matters more now
-than it did: split view (2.2), hibernation (2.3), and link peek all involve
-positioning and lifecycle-managing multiple views at once, which is precisely what
-`<webview>` makes awkward and `WebContentsView` makes explicit. Electron's team
-recommends `WebContentsView`.
-
-If you intend to build several of those, migrate before you build them, not after.
-If you're mainly after privacy defaults and a restyle, `<webview>` is fine
-indefinitely.
