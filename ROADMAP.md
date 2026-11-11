@@ -1,6 +1,4 @@
-# Making MiniBrowser different from Chrome
-
-## The honest starting point
+# Browser different from Chrome
 
 MiniBrowser doesn't feel like Chrome because it uses Chromium. It feels like
 Chrome because it was **styled as a Chrome replica**. Look at `index.html`:
